@@ -317,6 +317,18 @@ test('추론 모델의 think 블록을 걷어내고 JSON을 찾으며 빈 응답
     assert.throws(() => module.parseProfileResponse(''), /빈 응답.*응답 토큰/);
     assert.throws(() => module.parseProfileResponse('<think>생각만 하다 끝났다</think>'), /빈 응답/);
     assert.throws(() => module.parseProfileResponse('죄송하지만 프로필을 만들 수 없습니다.'), /JSON 객체가 없습니다.*죄송하지만/);
+
+    // 토큰 한도에서 문자열 중간에 잘린 응답도 복구한다.
+    const cutInString = '{"name":"Kaelen Vance","aliases":["Vance","Kaelen"],"appearance":"","personality":"직접적인 성격 묘사는 없으나 다나에 대해';
+    const repairedString = module.parseProfileResponse(cutInString);
+    assert.equal(repairedString.name, 'Kaelen Vance');
+    assert.deepEqual(repairedString.aliases, ['Vance', 'Kaelen']);
+
+    // 배열 중간에서 잘린 응답도 복구한다.
+    const cutInArray = '{"name":"캘런 밴스","personality":"냉소적","facts":["시즌의 절반을 대기석에서 보냈다","최근에 전학';
+    const repairedArray = module.parseProfileResponse(cutInArray);
+    assert.equal(repairedArray.name, '캘런 밴스');
+    assert.ok(repairedArray.facts.length >= 1);
     module.onDisable();
 });
 

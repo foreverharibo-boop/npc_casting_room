@@ -21,7 +21,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.2.1';
+const EXTENSION_VERSION = '1.2.2';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 const MAX_SCENES = 8;
 const MAX_SCENE_CHARS = 1500;
@@ -285,7 +285,7 @@ function npcPromptMessages(candidate, sceneText, existingContent = '') {
     const alsoCalled = candidate.members?.length
         ? ` This NPC is also referred to as: ${candidate.members.map((member) => JSON.stringify(member)).join(', ')}. Treat all of these as the same person.`
         : '';
-    const system = `You compile a factual profile card of one NPC from roleplay chat excerpts. Return JSON only, with no markdown.\n\nSchema:\n{"name":"","aliases":[""],"appearance":"","personality":"","speech_style":"","relationships":"","facts":[""],"example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- Describe only what the excerpts actually show or strongly imply; never invent details.\n- Write appearance, personality, speech_style, relationships, and facts in Korean.\n- example_lines must be lines spoken by the target NPC, copied verbatim in their original language from the excerpts. If unsure who spoke a line, omit it.\n- relationships describes how the NPC relates to the main characters (${mainNames}).\n- Leave a field as an empty string or empty array when the excerpts give no information.\n- Return at most 6 facts and 5 example_lines.`;
+    const system = `You compile a factual profile card of one NPC from roleplay chat excerpts. Return JSON only, with no markdown.\n\nSchema:\n{"name":"","aliases":[""],"appearance":"","personality":"","speech_style":"","relationships":"","facts":[""],"example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- Describe only what the excerpts actually show or strongly imply; never invent details.\n- Write appearance, personality, speech_style, relationships, and facts in Korean.\n- example_lines must be lines spoken by the target NPC, copied verbatim in their original language from the excerpts. If unsure who spoke a line, omit it.\n- relationships describes how the NPC relates to the main characters (${mainNames}).\n- Leave a field as an empty string or empty array when the excerpts give no information.\n- Return at most 5 facts and 4 example_lines.\n- Keep appearance, personality, speech_style, and relationships each under 300 characters, and each fact under 150 characters, so the whole reply fits within the response token limit.\n- The ENTIRE reply must be exactly one JSON object: the first character '{' and the last character '}'. No markdown, no bullet lists, no headings, no commentary, no code fences.`;
     const existing = existingContent
         ? `\n\nAn earlier profile of this NPC exists. Merge it with the new excerpts and return the updated full profile:\n${existingContent.slice(0, 1500)}`
         : '';
@@ -324,6 +324,47 @@ async function requestNpcProfile(prompt, signal) {
     return context.generateRaw({ prompt, responseLength: maxTokens, trimNames: false, signal });
 }
 
+function balanceClosers(fragment) {
+    let inString = false;
+    let escaped = false;
+    const stack = [];
+    for (const ch of fragment) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (inString) {
+            if (ch === '\\') escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === '{') stack.push('}');
+        else if (ch === '[') stack.push(']');
+        else if (ch === '}' || ch === ']') stack.pop();
+    }
+    return { closers: stack.reverse().join(''), inString };
+}
+
+// Salvage a JSON object that was cut off mid-way by the response token limit:
+// close the open string, trim dangling fragments, append missing brackets, and
+// keep trimming at the last comma until something parses.
+export function tryParseJsonLoose(fragment) {
+    let candidate = String(fragment ?? '').trim();
+    for (let attempt = 0; attempt < 40 && candidate.length > 2; attempt += 1) {
+        const state = balanceClosers(candidate);
+        let repaired = candidate + (state.inString ? '"' : '');
+        repaired = repaired.replace(/[,:\s]+$/, '');
+        try {
+            return JSON.parse(repaired + balanceClosers(repaired).closers);
+        } catch { /* trim further and retry */ }
+        const cut = candidate.lastIndexOf(',');
+        if (cut <= 0) break;
+        candidate = candidate.slice(0, cut);
+    }
+    return null;
+}
+
 export function parseProfileResponse(text) {
     const raw = String(text ?? '');
     // Reasoning models may wrap or prefix the answer with think blocks.
@@ -337,12 +378,23 @@ export function parseProfileResponse(text) {
         throw new Error('AI가 빈 응답을 보냈어요. 추론(thinking) 모델이라면 생각에 토큰을 다 썼을 수 있으니, 설정에서 「응답 토큰」을 올려 보세요.');
     }
     const start = clean.indexOf('{');
-    const end = clean.lastIndexOf('}');
-    if (start < 0 || end <= start) {
+    if (start < 0) {
         console.debug(`${LOG_PREFIX} JSON이 없는 응답 원문:`, raw.slice(0, 600));
         throw new Error(`AI 응답에 JSON 객체가 없습니다. 응답 시작 부분: "${clean.slice(0, 80)}"`);
     }
-    return JSON.parse(clean.slice(start, end + 1));
+    const end = clean.lastIndexOf('}');
+    if (end > start) {
+        try {
+            return JSON.parse(clean.slice(start, end + 1));
+        } catch { /* fall through to loose repair */ }
+    }
+    const repaired = tryParseJsonLoose(clean.slice(start));
+    if (repaired) {
+        console.debug(`${LOG_PREFIX} 잘린 JSON 응답을 복구해서 사용했어요.`);
+        return repaired;
+    }
+    console.debug(`${LOG_PREFIX} 복구 불가능한 응답 원문:`, raw.slice(0, 600));
+    throw new Error('AI 응답이 중간에 잘려 복구하지 못했어요. 설정에서 「응답 토큰」을 올려 보세요.');
 }
 
 function newEntryTemplate(uid, keys, comment, content) {
