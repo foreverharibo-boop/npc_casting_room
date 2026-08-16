@@ -47,6 +47,23 @@ test('영어 이름은 문장 중간 등장이 있어야 후보가 된다', () =
     assert.equal(firstWordOnly.some((candidate) => candidate.name === 'Veyra'), false);
 });
 
+test('페르소나·캐릭터 이름의 소유격은 후보로 잡지 않고, NPC 소유격은 원형과 합산한다', () => {
+    const messages = [
+        { id: 'm1', text: "Dana's coffee sat untouched while Kieran's jaw tightened." },
+        { id: 'm2', text: "She pushed Dana's book aside and ignored Kieran's glare." },
+        { id: 'm3', text: "Kieran's voice dropped as he read Dana's letter." },
+    ];
+    assert.equal(detectNpcCandidates(messages, ['Dana', 'Kieran']).length, 0);
+
+    const npcMessages = [
+        { id: 'm1', text: "She noticed Marcus's smile fading at the bar." },
+        { id: 'm2', text: 'The stranger nodded to Marcus without a word.' },
+    ];
+    const marcus = detectNpcCandidates(npcMessages, ['Dana', 'Kieran']).find((item) => item.name === 'Marcus');
+    assert.ok(marcus);
+    assert.equal(marcus.count, 2);
+});
+
 test('흔한 한국어 단어와 대명사는 후보로 잡지 않는다', () => {
     const messages = [
         { id: 'm1', text: '그녀가 목소리를 낮추며 고개를 저었다.' },

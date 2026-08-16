@@ -191,9 +191,13 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
             for (const [tokenIndex, tokenMatch] of tokens.entries()) {
                 const token = tokenMatch[0];
                 if (/^[A-Z][a-z''-]{2,}$/.test(token)) {
-                    const lower = token.toLocaleLowerCase();
+                    // Possessives ("Dana's", "Marcus'") are the same name, not
+                    // a new one — strip them before the known-name check.
+                    const stem = token.replace(/['']s?$/i, '');
+                    if (stem.length < 3) continue;
+                    const lower = stem.toLocaleLowerCase();
                     if (EN_COMMON_WORDS.has(lower) || known.has(lower)) continue;
-                    record(lower, token, message.id, sentence, {
+                    record(lower, stem, message.id, sentence, {
                         kind: 'en',
                         midSentence: tokenIndex > 0,
                         quotes,
