@@ -36,6 +36,22 @@
           </button>
         </div>
         <div id="npcc-queue-note" class="npcc-queue-note" hidden></div>
+
+        <div id="npcc-draft" class="npcc-draft" hidden>
+          <div class="npcc-section-head">
+            <div>
+              <strong>생성된 초안</strong>
+              <small id="npcc-draft-meta"></small>
+            </div>
+          </div>
+          <pre id="npcc-draft-text"></pre>
+          <div class="npcc-button-row">
+            <button id="npcc-draft-save" class="menu_button" type="button">💾 로어북 저장</button>
+            <button id="npcc-draft-clean" class="menu_button" type="button">🧹 (추정) 표시 지우기</button>
+            <button id="npcc-draft-cancel" class="menu_button" type="button">✖ 생성 취소</button>
+          </div>
+        </div>
+
         <div class="npcc-merge-bar">
           <button id="npcc-merge-selected" class="menu_button" type="button">🔗 선택 합치기</button>
           <small>같은 NPC가 성·이름·별명으로 따로 잡혔다면 체크한 뒤 합쳐 주세요. 합친 이름 전부가 로어북 키워드가 돼요.</small>

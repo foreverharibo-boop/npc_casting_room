@@ -191,6 +191,13 @@ test('메인 연결 사용 중에는 큐에 넣었다가 생성이 끝나면 자
     for (const handler of listeners.get(eventTypes.GENERATION_ENDED) ?? []) handler();
     await new Promise((resolve) => setTimeout(resolve, 700));
     assert.equal(generateRawCalls, 1);
+    // 자동 실행은 초안까지만 만들고, 저장은 사용자 확인을 기다린다.
+    assert.equal(saved.length, 0);
+    const draft = module.getPendingDraft();
+    assert.ok(draft);
+    assert.equal(draft.npcName, '민수');
+    const saveResult = await module.saveNpcDraft(draft);
+    assert.equal(saveResult.ok, true);
     assert.equal(saved.length, 1);
     module.onDisable();
 });

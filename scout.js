@@ -380,6 +380,17 @@ export function buildLorebookContent(npc) {
     return lines.join('\n');
 }
 
+/**
+ * Remove only the "(추정)" markers from generated content — the inferred
+ * values themselves are kept exactly as written.
+ */
+export function removeInferenceMarkers(content) {
+    return String(content ?? '')
+        .replace(/\s*\(추정\)/g, '')
+        .replace(/[ \t]+([,.;!?])/g, '$1')
+        .replace(/[ \t]{2,}/g, ' ');
+}
+
 export function buildEntryKeys(npc) {
     return [npc.name, ...(npc.aliases ?? [])]
         .map((value) => String(value ?? '').trim())

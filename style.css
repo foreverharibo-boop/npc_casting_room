@@ -88,6 +88,27 @@
   font-size: 0.9em;
 }
 
+#npcc-settings .npcc-draft {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--SmartThemeQuoteColor, currentColor);
+  border-radius: 9px;
+}
+
+#npcc-settings .npcc-draft pre {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 9px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor, transparent) 72%, transparent);
+  font-family: inherit;
+  font-size: 0.88em;
+}
+
 #npcc-settings .npcc-merge-bar {
   display: flex;
   flex-direction: row;
