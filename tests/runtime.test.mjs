@@ -349,6 +349,7 @@ test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한
 
     assert.match(prompts[0][0].content, /reference character sheet/i);
     assert.match(prompts[0][0].content, /Fill EVERY section.*\(추정\)/s);
+    assert.match(prompts[0][0].content, /Write every field value in English/);
     assert.match(prompts[0][1].content, /Name: Kieran/);
     const entry = saved[0].data.entries[0];
     assert.match(entry.content, /<character>/);
