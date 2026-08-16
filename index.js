@@ -7,9 +7,20 @@ import {
 } from './scout.js';
 
 const MODULE_NAME = 'npcCastingRoom';
-const EXTENSION_PATH = 'third-party/npc-casting-room';
+// Resolve the served extension path from this module's own URL so the
+// extension works no matter what the installed folder (= GitHub repo) is named.
+const EXTENSION_PATH = (() => {
+    try {
+        const parts = new URL('.', import.meta.url).pathname.split('/').filter(Boolean);
+        const anchor = parts.lastIndexOf('extensions');
+        if (anchor >= 0 && anchor < parts.length - 1) {
+            return decodeURIComponent(parts.slice(anchor + 1).join('/'));
+        }
+    } catch { /* fall through to the default */ }
+    return 'third-party/npc-casting-room';
+})();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.1.0';
+const EXTENSION_VERSION = '1.1.2';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 const MAX_SCENES = 8;
 const MAX_SCENE_CHARS = 1500;
@@ -679,6 +690,12 @@ async function initializeUi() {
     const container = document.getElementById('extensions_settings2') ?? document.getElementById('extensions_settings');
     if (!container) throw new Error('확장 설정 패널을 찾을 수 없습니다.');
     container.insertAdjacentHTML('beforeend', html);
+    // A wrong template path can resolve to a 404 page instead of throwing.
+    // Verify our actual markup arrived before wiring anything up.
+    if (!document.getElementById('npcc-enabled')) {
+        document.getElementById('npcc-settings')?.remove();
+        throw new Error(`설정 템플릿을 불러오지 못했습니다 (경로: ${EXTENSION_PATH}). 설치 폴더 구조를 확인해 주세요.`);
+    }
     uiReady = true;
     bindUi();
     populateProfiles();
