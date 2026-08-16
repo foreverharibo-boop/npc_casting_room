@@ -1,7 +1,8 @@
-const MAX_MESSAGE_CHARS = 12000;
-const MAX_CANDIDATES = 12;
-const MAX_EVIDENCE = 3;
-const MAX_DIALOGUE_LINES = 5;
+// Backstop values only — far above any realistic content, never a creative limit.
+const MAX_MESSAGE_CHARS = 200000;
+const MAX_CANDIDATES = 50;
+const MAX_EVIDENCE = 10;
+const MAX_DIALOGUE_LINES = 20;
 
 const VOID_HTML_TAGS = new Set([
     'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta',
@@ -301,27 +302,27 @@ export function sanitizeNpcProfile(raw, sceneText, fallbackName = '') {
     if (/\b(?:ignore|override|disregard)\b.{0,40}\b(?:instruction|prompt|rule)s?\b/i.test(whole)
         || /\b(?:reveal|print|repeat)\b.{0,40}\b(?:system prompt|hidden instruction)s?\b/i.test(whole)) return null;
 
-    const name = cleanProfileText(raw.name, 60) || cleanProfileText(fallbackName, 60);
+    const name = cleanProfileText(raw.name, 200) || cleanProfileText(fallbackName, 200);
     if (!name) return null;
     const aliases = (Array.isArray(raw.aliases) ? raw.aliases : [])
-        .map((value) => cleanProfileText(value, 40))
+        .map((value) => cleanProfileText(value, 100))
         .filter((value) => value && value !== name)
         .filter((value, index, all) => all.indexOf(value) === index)
-        .slice(0, 6);
-    const appearance = cleanProfileText(raw.appearance, 400);
-    const personality = cleanProfileText(raw.personality, 400);
-    const speechStyle = cleanProfileText(raw.speech_style ?? raw.speechStyle, 400);
-    const relationships = cleanProfileText(raw.relationships, 400);
+        .slice(0, 20);
+    const appearance = cleanProfileText(raw.appearance, 10000);
+    const personality = cleanProfileText(raw.personality, 10000);
+    const speechStyle = cleanProfileText(raw.speech_style ?? raw.speechStyle, 10000);
+    const relationships = cleanProfileText(raw.relationships, 10000);
     const facts = (Array.isArray(raw.facts) ? raw.facts : [])
-        .map((value) => cleanProfileText(value, 200))
+        .map((value) => cleanProfileText(value, 4000))
         .filter(Boolean)
-        .slice(0, 6);
+        .slice(0, 50);
     const normalizedScenes = normalizeForMatch(sceneText);
     const exampleLines = (Array.isArray(raw.example_lines) ? raw.example_lines : [])
-        .map((value) => cleanProfileText(value, 200))
+        .map((value) => cleanProfileText(value, 2000))
         .filter(Boolean)
         .filter((line) => normalizedScenes.includes(normalizeForMatch(line)))
-        .slice(0, 5);
+        .slice(0, 30);
 
     if (!appearance && !personality && !speechStyle && !facts.length) return null;
     return { name, aliases, appearance, personality, speechStyle, relationships, facts, exampleLines };
@@ -338,27 +339,27 @@ export function sanitizeSheetProfile(raw, sceneText, fallbackName = '') {
     if (/\b(?:ignore|override|disregard)\b.{0,40}\b(?:instruction|prompt|rule)s?\b/i.test(whole)
         || /\b(?:reveal|print|repeat)\b.{0,40}\b(?:system prompt|hidden instruction)s?\b/i.test(whole)) return null;
 
-    const name = cleanProfileText(raw.name, 60) || cleanProfileText(fallbackName, 60);
+    const name = cleanProfileText(raw.name, 200) || cleanProfileText(fallbackName, 200);
     if (!name) return null;
     const aliases = (Array.isArray(raw.aliases) ? raw.aliases : [])
-        .map((value) => cleanProfileText(value, 40))
+        .map((value) => cleanProfileText(value, 100))
         .filter((value) => value && value !== name)
         .filter((value, index, all) => all.indexOf(value) === index)
-        .slice(0, 6);
+        .slice(0, 20);
     const sheet = String(raw.sheet ?? '')
         .replace(/```/g, '')
         .replace(/^\s*(?:system|assistant|user)\s*:/gim, '')
         .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
-        .slice(0, 5000);
+        .slice(0, 1000000);
     if (!sheet) return null;
     const normalizedScenes = normalizeForMatch(sceneText);
     const exampleLines = (Array.isArray(raw.example_lines) ? raw.example_lines : [])
-        .map((value) => cleanProfileText(value, 200))
+        .map((value) => cleanProfileText(value, 2000))
         .filter(Boolean)
         .filter((line) => normalizedScenes.includes(normalizeForMatch(line)))
-        .slice(0, 4);
+        .slice(0, 30);
     return { name, aliases, sheet, exampleLines };
 }
 
@@ -396,5 +397,5 @@ export function buildEntryKeys(npc) {
         .map((value) => String(value ?? '').trim())
         .filter(Boolean)
         .filter((value, index, all) => all.indexOf(value) === index)
-        .slice(0, 8);
+        .slice(0, 30);
 }
