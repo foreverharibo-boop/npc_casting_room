@@ -327,6 +327,41 @@ export function sanitizeNpcProfile(raw, sceneText, fallbackName = '') {
     return { name, aliases, appearance, personality, speechStyle, relationships, facts, exampleLines };
 }
 
+/**
+ * Sanitize a sheet-format profile: the sheet text imitates the character
+ * card's own markup, so tags and line breaks are preserved — only control
+ * characters, code fences, role prefixes, and hijack attempts are removed.
+ */
+export function sanitizeSheetProfile(raw, sceneText, fallbackName = '') {
+    if (!raw || typeof raw !== 'object') return null;
+    const whole = JSON.stringify(raw);
+    if (/\b(?:ignore|override|disregard)\b.{0,40}\b(?:instruction|prompt|rule)s?\b/i.test(whole)
+        || /\b(?:reveal|print|repeat)\b.{0,40}\b(?:system prompt|hidden instruction)s?\b/i.test(whole)) return null;
+
+    const name = cleanProfileText(raw.name, 60) || cleanProfileText(fallbackName, 60);
+    if (!name) return null;
+    const aliases = (Array.isArray(raw.aliases) ? raw.aliases : [])
+        .map((value) => cleanProfileText(value, 40))
+        .filter((value) => value && value !== name)
+        .filter((value, index, all) => all.indexOf(value) === index)
+        .slice(0, 6);
+    const sheet = String(raw.sheet ?? '')
+        .replace(/```/g, '')
+        .replace(/^\s*(?:system|assistant|user)\s*:/gim, '')
+        .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+        .slice(0, 5000);
+    if (!sheet) return null;
+    const normalizedScenes = normalizeForMatch(sceneText);
+    const exampleLines = (Array.isArray(raw.example_lines) ? raw.example_lines : [])
+        .map((value) => cleanProfileText(value, 200))
+        .filter(Boolean)
+        .filter((line) => normalizedScenes.includes(normalizeForMatch(line)))
+        .slice(0, 4);
+    return { name, aliases, sheet, exampleLines };
+}
+
 export function buildLorebookContent(npc) {
     const lines = [`[NPC: ${npc.name}]`];
     if (npc.aliases?.length) lines.push(`별칭·호칭: ${npc.aliases.join(', ')}`);

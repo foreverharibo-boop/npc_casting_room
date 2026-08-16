@@ -4,6 +4,7 @@ import {
     detectNpcCandidates,
     mergeCandidates,
     sanitizeNpcProfile,
+    sanitizeSheetProfile,
     stripDecorations,
 } from './scout.js';
 
@@ -21,7 +22,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.2.2';
+const EXTENSION_VERSION = '1.3.1';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 const MAX_SCENES = 8;
 const MAX_SCENE_CHARS = 1500;
@@ -33,6 +34,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     lorebookTarget: 'character',
     profileId: '',
     maxTokens: 1200,
+    entryFormat: 'sheet',
+    inferMissing: true,
     dismissed: {},
     createdEntries: {},
     mergedGroups: {},
@@ -70,6 +73,9 @@ function getSettings() {
     settings.createdEntries = settings.createdEntries && typeof settings.createdEntries === 'object' ? settings.createdEntries : {};
     settings.mergedGroups = settings.mergedGroups && typeof settings.mergedGroups === 'object' ? settings.mergedGroups : {};
     settings.lorebookTarget = settings.lorebookTarget === 'chat' ? 'chat' : 'character';
+    settings.entryFormat = settings.entryFormat === 'basic' ? 'basic' : 'sheet';
+    settings.inferMissing = settings.inferMissing !== false;
+    settings.maxTokens = Math.min(30000, Math.max(256, Math.round(Number(settings.maxTokens) || DEFAULT_SETTINGS.maxTokens)));
     return settings;
 }
 
@@ -279,13 +285,41 @@ function buildScenesFor(candidate) {
     return scenes.join('\n\n');
 }
 
+function referenceSheetText() {
+    const context = getContext();
+    if (isGroupChat(context)) return '';
+    const character = context.characters?.[Number(context.characterId)];
+    const description = String(character?.description ?? character?.data?.description ?? '').trim();
+    return description.slice(0, 3500);
+}
+
+function npcSheetPromptMessages(candidate, sceneText, referenceSheet, existingContent = '') {
+    const alsoCalled = candidate.members?.length
+        ? ` This NPC is also referred to as: ${candidate.members.map((member) => JSON.stringify(member)).join(', ')}. Treat all of these as the same person.`
+        : '';
+    const coverageRule = getSettings().inferMissing
+        ? `- Fill EVERY section of the sheet; leave nothing empty. When the excerpts give no direct information for a section, infer the most plausible value from the NPC's shown behavior, dialogue, and context, and append "(추정)" to each inferred value. Inferences must never contradict anything shown in the excerpts.`
+        : `- Omit sections the excerpts give no information for.\n- Describe only what the excerpts actually show or strongly imply; never invent details.`;
+    const system = `You compile a factual profile of one NPC from roleplay chat excerpts, formatted to match a reference character sheet. Return JSON only, with no markdown fences.\n\nSchema:\n{"name":"","aliases":[""],"sheet":"","example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- "sheet" must imitate the reference character sheet's format exactly: the same section names, the same order, the same markup or tag style, and the same language for section labels. Fill the sections with the TARGET NPC's information only.\n- The reference sheet describes a DIFFERENT character. Never copy its facts, personality, or story details — copy only its structure.\n${coverageRule}\n- example_lines: lines spoken by the target NPC, copied verbatim from the excerpts (max 4). If unsure who spoke a line, omit it.\n- Keep the sheet concise so the whole reply fits within the response token limit.\n- The ENTIRE reply must be exactly one JSON object: the first character '{' and the last character '}'. No markdown, no commentary.`;
+    const existing = existingContent
+        ? `\n\nAn earlier profile of this NPC exists. Merge it with the new excerpts and return the updated full sheet:\n${existingContent.slice(0, 1500)}`
+        : '';
+    const user = `Chat excerpts:\n\n${sceneText}\n\nReference character sheet (FORMAT ONLY — different character):\n${referenceSheet}${existing}`;
+    return [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+    ];
+}
+
 function npcPromptMessages(candidate, sceneText, existingContent = '') {
     const context = getContext();
     const mainNames = [context.name1, context.name2].filter(Boolean).join(', ');
     const alsoCalled = candidate.members?.length
         ? ` This NPC is also referred to as: ${candidate.members.map((member) => JSON.stringify(member)).join(', ')}. Treat all of these as the same person.`
         : '';
-    const system = `You compile a factual profile card of one NPC from roleplay chat excerpts. Return JSON only, with no markdown.\n\nSchema:\n{"name":"","aliases":[""],"appearance":"","personality":"","speech_style":"","relationships":"","facts":[""],"example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- Describe only what the excerpts actually show or strongly imply; never invent details.\n- Write appearance, personality, speech_style, relationships, and facts in Korean.\n- example_lines must be lines spoken by the target NPC, copied verbatim in their original language from the excerpts. If unsure who spoke a line, omit it.\n- relationships describes how the NPC relates to the main characters (${mainNames}).\n- Leave a field as an empty string or empty array when the excerpts give no information.\n- Return at most 5 facts and 4 example_lines.\n- Keep appearance, personality, speech_style, and relationships each under 300 characters, and each fact under 150 characters, so the whole reply fits within the response token limit.\n- The ENTIRE reply must be exactly one JSON object: the first character '{' and the last character '}'. No markdown, no bullet lists, no headings, no commentary, no code fences.`;
+    const system = `You compile a factual profile card of one NPC from roleplay chat excerpts. Return JSON only, with no markdown.\n\nSchema:\n{"name":"","aliases":[""],"appearance":"","personality":"","speech_style":"","relationships":"","facts":[""],"example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- Describe only what the excerpts actually show or strongly imply; never invent details.\n- Write appearance, personality, speech_style, relationships, and facts in Korean.\n- example_lines must be lines spoken by the target NPC, copied verbatim in their original language from the excerpts. If unsure who spoke a line, omit it.\n- relationships describes how the NPC relates to the main characters (${mainNames}).\n${getSettings().inferMissing
+        ? '- Fill every field; leave nothing empty. When the excerpts give no direct information, infer the most plausible value from the NPC\'s shown behavior, dialogue, and context, and append "(추정)" to each inferred value. Inferences must never contradict the excerpts.'
+        : '- Leave a field as an empty string or empty array when the excerpts give no information.'}\n- Return at most 5 facts and 4 example_lines.\n- Keep appearance, personality, speech_style, and relationships each under 300 characters, and each fact under 150 characters, so the whole reply fits within the response token limit.\n- The ENTIRE reply must be exactly one JSON object: the first character '{' and the last character '}'. No markdown, no bullet lists, no headings, no commentary, no code fences.`;
     const existing = existingContent
         ? `\n\nAn earlier profile of this NPC exists. Merge it with the new excerpts and return the updated full profile:\n${existingContent.slice(0, 1500)}`
         : '';
@@ -497,13 +531,21 @@ export async function createNpcLorebookEntry(candidate, { manual = true } = {}) 
             existingContent = String(data.entries[existing.uid].content ?? '');
         }
 
+        const settings = getSettings();
+        const referenceSheet = settings.entryFormat !== 'basic' ? referenceSheetText() : '';
+        const useSheetFormat = Boolean(referenceSheet);
         requestAbortController?.abort();
         requestAbortController = new AbortController();
         const response = await requestNpcProfile(
-            npcPromptMessages(candidate, sceneText, existingContent),
+            useSheetFormat
+                ? npcSheetPromptMessages(candidate, sceneText, referenceSheet, existingContent)
+                : npcPromptMessages(candidate, sceneText, existingContent),
             requestAbortController.signal,
         );
-        const npc = sanitizeNpcProfile(parseProfileResponse(response), sceneText, candidate.name);
+        const parsed = parseProfileResponse(response);
+        const npc = useSheetFormat
+            ? sanitizeSheetProfile(parsed, sceneText, candidate.name)
+            : sanitizeNpcProfile(parsed, sceneText, candidate.name);
         if (!npc) throw new Error('AI가 만든 프로필이 검증을 통과하지 못했어요.');
         // Merged candidates: every member name must survive as a lorebook key
         // so the entry triggers no matter which name the chat uses.
@@ -512,7 +554,16 @@ export async function createNpcLorebookEntry(candidate, { manual = true } = {}) 
         }
         npc.aliases = npc.aliases.slice(0, 7);
 
-        const content = buildLorebookContent(npc);
+        let content;
+        if (useSheetFormat) {
+            content = npc.sheet;
+            const missingLines = (npc.exampleLines ?? []).filter((line) => !content.includes(line));
+            if (missingLines.length) {
+                content += `\n\n예시 대사:\n${missingLines.map((line) => `- "${line}"`).join('\n')}`;
+            }
+        } else {
+            content = buildLorebookContent(npc);
+        }
         const keys = buildEntryKeys(npc);
         if (manual) {
             const approved = await confirmAction(
@@ -785,8 +836,12 @@ function updateUi() {
     document.getElementById('npcc-window-size').value = String(settings.windowSize);
     document.getElementById('npcc-min-messages').value = String(settings.minMessages);
     document.getElementById('npcc-target').value = settings.lorebookTarget;
-    const maxTokensSelect = document.getElementById('npcc-max-tokens');
-    if (maxTokensSelect) maxTokensSelect.value = String(settings.maxTokens);
+    const maxTokensInput = document.getElementById('npcc-max-tokens');
+    if (maxTokensInput) maxTokensInput.value = String(settings.maxTokens);
+    const entryFormatSelect = document.getElementById('npcc-entry-format');
+    if (entryFormatSelect) entryFormatSelect.value = settings.entryFormat;
+    const inferMissingCheck = document.getElementById('npcc-infer-missing');
+    if (inferMissingCheck) inferMissingCheck.checked = Boolean(settings.inferMissing);
     document.getElementById('npcc-candidate-count').textContent = String(settings.enabled ? lastCandidates.length : 0);
     const queueNote = document.getElementById('npcc-queue-note');
     if (queueNote) {
@@ -836,7 +891,14 @@ function bindUi() {
     bindSetting('npcc-min-messages', 'minMessages', Number);
     bindSetting('npcc-target', 'lorebookTarget', String);
     bindSetting('npcc-profile', 'profileId', String);
-    bindSetting('npcc-max-tokens', 'maxTokens', Number);
+    bindSetting('npcc-entry-format', 'entryFormat', String);
+    bindSetting('npcc-infer-missing', 'inferMissing', Boolean);
+    bindSetting('npcc-max-tokens', 'maxTokens', (value) => {
+        const parsed = Math.round(Number(value));
+        return Number.isFinite(parsed) && parsed > 0
+            ? Math.min(30000, Math.max(256, parsed))
+            : DEFAULT_SETTINGS.maxTokens;
+    });
 
     document.getElementById('npcc-rescan')?.addEventListener('click', () => {
         scanCandidates();

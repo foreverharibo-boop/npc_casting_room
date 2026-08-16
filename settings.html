@@ -93,16 +93,26 @@
           </select>
         </label>
 
-        <label class="npcc-field" for="npcc-max-tokens">
-          <span>응답 토큰</span>
-          <select id="npcc-max-tokens" class="text_pole">
-            <option value="1200">1200 (기본)</option>
-            <option value="2000">2000</option>
-            <option value="3000">3000 (추론 모델 권장)</option>
-            <option value="4000">4000</option>
+        <label class="npcc-field" for="npcc-entry-format">
+          <span>항목 양식</span>
+          <select id="npcc-entry-format" class="text_pole">
+            <option value="sheet">현재 캐릭터 시트 양식 따라하기</option>
+            <option value="basic">캐스팅룸 기본 양식</option>
           </select>
         </label>
-        <small class="npcc-field-note">추론(thinking) 모델은 생각에 토큰을 쓰기 때문에 「AI가 빈 응답을 보냈어요」가 뜨면 이 값을 올려 주세요.</small>
+        <small class="npcc-field-note">시트 양식을 따라하면 현재 카드 설명의 구조(항목 이름·순서·마크업)를 그대로 흉내 내서 NPC 항목을 작성해요. 카드 설명이 비어 있거나 그룹챗이면 기본 양식으로 저장돼요.</small>
+
+        <label class="npcc-field" for="npcc-infer-missing">
+          <span>빈 항목 AI 추론으로 채우기</span>
+          <input id="npcc-infer-missing" type="checkbox">
+        </label>
+        <small class="npcc-field-note">장면에 직접 나오지 않은 항목도 NPC의 행동·말투에서 그럴듯하게 추론해 채워요. 추론한 값에는 "(추정)"이 붙어서 관찰된 사실과 구분돼요. 끄면 확인된 정보만 기록해요.</small>
+
+        <label class="npcc-field" for="npcc-max-tokens">
+          <span>응답 토큰</span>
+          <input id="npcc-max-tokens" class="text_pole" type="number" min="256" max="30000" step="100" placeholder="1200">
+        </label>
+        <small class="npcc-field-note">256~30000 사이에서 원하는 값을 직접 입력해요. 추론(thinking) 모델은 생각에 토큰을 쓰기 때문에 응답이 비거나 잘리면 이 값을 올려 주세요 (권장 3000 이상).</small>
         <small class="npcc-field-note">별도 Connection Profile을 고르면 메인 연결과 완전히 분리된 백그라운드 경로로 요청해서, 채팅 생성 중에도 겹치지 않아요. 「현재 연결 사용」인 경우에는 채팅 생성이 끝날 때까지 기다렸다가 자동으로 실행해요.</small>
 
         <div class="npcc-button-row">

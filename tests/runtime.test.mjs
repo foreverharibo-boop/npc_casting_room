@@ -304,6 +304,58 @@ test('성과 이름으로 따로 잡힌 후보를 합치면 하나가 되고 모
     module.onDisable();
 });
 
+test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한다', async () => {
+    const saved = [];
+    const prompts = [];
+    const context = makeContext({
+        name2: 'Kieran',
+        characters: [{
+            name: 'Kieran',
+            avatar: 'kieran.png',
+            description: '<character>\nName: Kieran\nAge: 19\nPersonality: fierce and loyal\n</character>',
+            data: {},
+        }],
+        chat: [
+            { name: 'Kieran', send_date: 1, mes: '민수가 카운터 너머에서 잔을 닦았다.' },
+            { name: 'Kieran', send_date: 2, mes: '민수는 조용히 고개를 저었다.' },
+            { name: 'Kieran', send_date: 3, mes: '그가 민수를 바라보았다.' },
+        ],
+        generateRaw: async ({ prompt }) => {
+            prompts.push(prompt);
+            return JSON.stringify({
+                name: '민수',
+                aliases: [],
+                sheet: '<character>\nName: 민수\nAge: 30대 중반\nPersonality: 무뚝뚝하지만 다정함\n</character>',
+                example_lines: [],
+            });
+        },
+        loadWorldInfo: async () => null,
+        saveWorldInfo: async (name, data) => saved.push({ name, data }),
+        writeExtensionField: async () => {},
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?sheet=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const result = await module.createNpcLorebookEntry(candidate);
+    assert.equal(result.ok, true);
+
+    assert.match(prompts[0][0].content, /reference character sheet/i);
+    assert.match(prompts[0][0].content, /Fill EVERY section.*\(추정\)/s);
+    assert.match(prompts[0][1].content, /Name: Kieran/);
+    const entry = saved[0].data.entries[0];
+    assert.match(entry.content, /<character>/);
+    assert.match(entry.content, /Name: 민수/);
+    assert.doesNotMatch(entry.content, /\[NPC: 민수\]/);
+
+    // 추론 채우기를 끄면 "확인된 정보만" 규칙으로 돌아간다.
+    context.extensionSettings.npcCastingRoom.inferMissing = false;
+    await module.createNpcLorebookEntry(candidate);
+    assert.match(prompts[1][0].content, /Omit sections/);
+    assert.doesNotMatch(prompts[1][0].content, /Fill EVERY section/);
+    module.onDisable();
+});
+
 test('추론 모델의 think 블록을 걷어내고 JSON을 찾으며 빈 응답에는 토큰 안내를 한다', async () => {
     const context = makeContext();
     globalThis.SillyTavern = { getContext: () => context };
