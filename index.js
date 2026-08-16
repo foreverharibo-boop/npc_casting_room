@@ -21,7 +21,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.2.0';
+const EXTENSION_VERSION = '1.2.1';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 const MAX_SCENES = 8;
 const MAX_SCENE_CHARS = 1500;
@@ -324,11 +324,24 @@ async function requestNpcProfile(prompt, signal) {
     return context.generateRaw({ prompt, responseLength: maxTokens, trimNames: false, signal });
 }
 
-function parseProfileResponse(text) {
-    const clean = String(text ?? '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+export function parseProfileResponse(text) {
+    const raw = String(text ?? '');
+    // Reasoning models may wrap or prefix the answer with think blocks.
+    const clean = raw
+        .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
+        .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, ' ')
+        .replace(/```(?:json)?/gi, '')
+        .replace(/```/g, '')
+        .trim();
+    if (!clean) {
+        throw new Error('AI가 빈 응답을 보냈어요. 추론(thinking) 모델이라면 생각에 토큰을 다 썼을 수 있으니, 설정에서 「응답 토큰」을 올려 보세요.');
+    }
     const start = clean.indexOf('{');
     const end = clean.lastIndexOf('}');
-    if (start < 0 || end <= start) throw new Error('AI 응답에 JSON 객체가 없습니다.');
+    if (start < 0 || end <= start) {
+        console.debug(`${LOG_PREFIX} JSON이 없는 응답 원문:`, raw.slice(0, 600));
+        throw new Error(`AI 응답에 JSON 객체가 없습니다. 응답 시작 부분: "${clean.slice(0, 80)}"`);
+    }
     return JSON.parse(clean.slice(start, end + 1));
 }
 
@@ -720,6 +733,8 @@ function updateUi() {
     document.getElementById('npcc-window-size').value = String(settings.windowSize);
     document.getElementById('npcc-min-messages').value = String(settings.minMessages);
     document.getElementById('npcc-target').value = settings.lorebookTarget;
+    const maxTokensSelect = document.getElementById('npcc-max-tokens');
+    if (maxTokensSelect) maxTokensSelect.value = String(settings.maxTokens);
     document.getElementById('npcc-candidate-count').textContent = String(settings.enabled ? lastCandidates.length : 0);
     const queueNote = document.getElementById('npcc-queue-note');
     if (queueNote) {
@@ -769,6 +784,7 @@ function bindUi() {
     bindSetting('npcc-min-messages', 'minMessages', Number);
     bindSetting('npcc-target', 'lorebookTarget', String);
     bindSetting('npcc-profile', 'profileId', String);
+    bindSetting('npcc-max-tokens', 'maxTokens', Number);
 
     document.getElementById('npcc-rescan')?.addEventListener('click', () => {
         scanCandidates();

@@ -304,6 +304,22 @@ test('성과 이름으로 따로 잡힌 후보를 합치면 하나가 되고 모
     module.onDisable();
 });
 
+test('추론 모델의 think 블록을 걷어내고 JSON을 찾으며 빈 응답에는 토큰 안내를 한다', async () => {
+    const context = makeContext();
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?parse=${Date.now()}`);
+
+    const wrapped = `<think>이 NPC는 바텐더로 보인다. 근거를 정리하자...</think>\n${PROFILE_JSON}`;
+    const parsed = module.parseProfileResponse(wrapped);
+    assert.equal(parsed.name, '민수');
+
+    assert.throws(() => module.parseProfileResponse(''), /빈 응답.*응답 토큰/);
+    assert.throws(() => module.parseProfileResponse('<think>생각만 하다 끝났다</think>'), /빈 응답/);
+    assert.throws(() => module.parseProfileResponse('죄송하지만 프로필을 만들 수 없습니다.'), /JSON 객체가 없습니다.*죄송하지만/);
+    module.onDisable();
+});
+
 test('무시한 이름은 후보 목록에서 사라지고 무시 목록은 카드별로 저장된다', async () => {
     const context = makeContext();
     globalThis.SillyTavern = { getContext: () => context };

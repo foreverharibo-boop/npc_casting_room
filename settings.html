@@ -92,6 +92,17 @@
             <option value="">현재 연결 사용</option>
           </select>
         </label>
+
+        <label class="npcc-field" for="npcc-max-tokens">
+          <span>응답 토큰</span>
+          <select id="npcc-max-tokens" class="text_pole">
+            <option value="1200">1200 (기본)</option>
+            <option value="2000">2000</option>
+            <option value="3000">3000 (추론 모델 권장)</option>
+            <option value="4000">4000</option>
+          </select>
+        </label>
+        <small class="npcc-field-note">추론(thinking) 모델은 생각에 토큰을 쓰기 때문에 「AI가 빈 응답을 보냈어요」가 뜨면 이 값을 올려 주세요.</small>
         <small class="npcc-field-note">별도 Connection Profile을 고르면 메인 연결과 완전히 분리된 백그라운드 경로로 요청해서, 채팅 생성 중에도 겹치지 않아요. 「현재 연결 사용」인 경우에는 채팅 생성이 끝날 때까지 기다렸다가 자동으로 실행해요.</small>
 
         <div class="npcc-button-row">
