@@ -245,6 +245,65 @@ test('별도 연결 프로필을 쓰면 메인 생성 중에도 대기 없이 �
     module.onDisable();
 });
 
+test('성과 이름으로 따로 잡힌 후보를 합치면 하나가 되고 모든 이름이 로어북 키에 들어간다', async () => {
+    const saved = [];
+    const context = makeContext({
+        chat: [
+            { name: 'Peter', send_date: 1, mes: '캘런이 창가에 앉아 있었다. 캘런은 말이 없었다.' },
+            { name: 'Peter', send_date: 2, mes: '"그래서 어쩌라고?" 밴스가 코웃음을 쳤다. 캘런의 시선이 낮아졌다.' },
+            { name: 'Peter', send_date: 3, mes: '밴스는 어깨를 으쓱하고 방을 나갔다. 밴스가 문을 닫았다.' },
+        ],
+        generateRaw: async () => JSON.stringify({
+            name: '캘런 밴스',
+            aliases: ['캘런'],
+            personality: '냉소적이지만 관찰력이 좋다',
+            speech_style: '비꼬는 짧은 말투',
+            example_lines: ['그래서 어쩌라고?'],
+        }),
+        loadWorldInfo: async () => null,
+        saveWorldInfo: async (name, data) => saved.push({ name, data }),
+        writeExtensionField: async () => {},
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?merge=${Date.now()}`);
+
+    const before = module.scanCandidates();
+    assert.ok(before.some((item) => item.name === '캘런'));
+    assert.ok(before.some((item) => item.name === '밴스'));
+
+    assert.equal(module.mergeCandidateGroup(['캘런', '밴스'], '캘런 밴스'), true);
+    const after = module.scanCandidates();
+    assert.equal(after.some((item) => item.name === '캘런'), false);
+    assert.equal(after.some((item) => item.name === '밴스'), false);
+    const mergedCandidate = after.find((item) => item.name === '캘런 밴스');
+    assert.ok(mergedCandidate);
+    assert.equal(mergedCandidate.count, 3);
+    assert.deepEqual(mergedCandidate.members, ['캘런', '밴스']);
+
+    // 합침 해제는 생성 전에 검증한다. 생성 후에는 NPC가 "아는 이름"이 되어
+    // 후보 목록에 다시 올라오지 않는 것이 정상 동작이다.
+    module.unmergeCandidateGroup('캘런 밴스');
+    const restored = module.scanCandidates();
+    assert.ok(restored.some((item) => item.name === '캘런'));
+    assert.ok(restored.some((item) => item.name === '밴스'));
+
+    assert.equal(module.mergeCandidateGroup(['캘런', '밴스'], '캘런 밴스'), true);
+    const remergedCandidate = module.scanCandidates().find((item) => item.name === '캘런 밴스');
+    const result = await module.createNpcLorebookEntry(remergedCandidate);
+    assert.equal(result.ok, true);
+    const entry = saved[0].data.entries[0];
+    assert.ok(entry.key.includes('캘런 밴스'));
+    assert.ok(entry.key.includes('캘런'));
+    assert.ok(entry.key.includes('밴스'));
+    assert.match(entry.content, /그래서 어쩌라고\?/);
+
+    // 데뷔한 NPC의 이름들은 이후 스캔에서 후보로 다시 올라오지 않는다.
+    const afterDebut = module.scanCandidates();
+    assert.equal(afterDebut.some((item) => ['캘런', '밴스', '캘런 밴스'].includes(item.name)), false);
+    module.onDisable();
+});
+
 test('무시한 이름은 후보 목록에서 사라지고 무시 목록은 카드별로 저장된다', async () => {
     const context = makeContext();
     globalThis.SillyTavern = { getContext: () => context };

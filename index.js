@@ -2,6 +2,7 @@ import {
     buildEntryKeys,
     buildLorebookContent,
     detectNpcCandidates,
+    mergeCandidates,
     sanitizeNpcProfile,
     stripDecorations,
 } from './scout.js';
@@ -20,7 +21,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.1.2';
+const EXTENSION_VERSION = '1.2.0';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 const MAX_SCENES = 8;
 const MAX_SCENE_CHARS = 1500;
@@ -34,6 +35,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     maxTokens: 1200,
     dismissed: {},
     createdEntries: {},
+    mergedGroups: {},
 });
 
 let uiReady = false;
@@ -66,6 +68,7 @@ function getSettings() {
     const settings = context.extensionSettings[MODULE_NAME];
     settings.dismissed = settings.dismissed && typeof settings.dismissed === 'object' ? settings.dismissed : {};
     settings.createdEntries = settings.createdEntries && typeof settings.createdEntries === 'object' ? settings.createdEntries : {};
+    settings.mergedGroups = settings.mergedGroups && typeof settings.mergedGroups === 'object' ? settings.mergedGroups : {};
     settings.lorebookTarget = settings.lorebookTarget === 'chat' ? 'chat' : 'character';
     return settings;
 }
@@ -145,13 +148,62 @@ function dismissName(name) {
     saveSettings();
 }
 
+function mergedGroupsForScope() {
+    const settings = getSettings();
+    const list = settings.mergedGroups[dismissScopeKey()];
+    return Array.isArray(list) ? list : [];
+}
+
+export function mergeCandidateGroup(memberNames, displayName) {
+    const members = [...new Set((memberNames ?? []).map((value) => String(value ?? '').trim()).filter(Boolean))];
+    const name = String(displayName ?? '').trim() || members.join(' ');
+    if (members.length < 2 || !name) return false;
+    const settings = getSettings();
+    const key = dismissScopeKey();
+    if (!Array.isArray(settings.mergedGroups[key])) settings.mergedGroups[key] = [];
+    // Groups overlapping the new selection are absorbed into it.
+    const overlapping = settings.mergedGroups[key].filter((group) =>
+        group.members.some((member) => members.some((value) => value.toLocaleLowerCase() === member.toLocaleLowerCase())));
+    const allMembers = [...new Set([...members, ...overlapping.flatMap((group) => group.members)])];
+    settings.mergedGroups[key] = settings.mergedGroups[key]
+        .filter((group) => !overlapping.includes(group))
+        .concat([{ name, members: allMembers }])
+        .slice(-50);
+    saveSettings();
+    return true;
+}
+
+export function unmergeCandidateGroup(displayName) {
+    const settings = getSettings();
+    const key = dismissScopeKey();
+    const list = Array.isArray(settings.mergedGroups[key]) ? settings.mergedGroups[key] : [];
+    settings.mergedGroups[key] = list.filter((group) => group.name !== displayName);
+    saveSettings();
+}
+
 export function scanCandidates() {
     const settings = getSettings();
     lastMessages = collectRecentMessages();
     const dismissed = dismissedNames();
-    lastCandidates = detectNpcCandidates(lastMessages, knownCharacterNames(), {
+    const detected = detectNpcCandidates(lastMessages, knownCharacterNames(), {
         minMessages: Number(settings.minMessages) || DEFAULT_SETTINGS.minMessages,
-    }).filter((candidate) => !dismissed.has(candidate.name.toLocaleLowerCase()));
+    });
+
+    const byLower = new Map(detected.map((candidate) => [candidate.name.toLocaleLowerCase(), candidate]));
+    const consumed = new Set();
+    const merged = [];
+    for (const group of mergedGroupsForScope()) {
+        const parts = group.members
+            .map((member) => byLower.get(member.toLocaleLowerCase()))
+            .filter(Boolean);
+        if (!parts.length) continue;
+        parts.forEach((part) => consumed.add(part));
+        merged.push(mergeCandidates(group, parts));
+    }
+
+    lastCandidates = [...merged, ...detected.filter((candidate) => !consumed.has(candidate))]
+        .filter((candidate) => !dismissed.has(candidate.name.toLocaleLowerCase()))
+        .sort((a, b) => b.score - a.score);
     return lastCandidates;
 }
 
@@ -213,12 +265,15 @@ async function getWriteExtensionField() {
 }
 
 function buildScenesFor(candidate) {
-    const needle = candidate.name.toLocaleLowerCase();
+    const needles = [candidate.name, ...(candidate.members ?? [])]
+        .map((value) => String(value ?? '').toLocaleLowerCase())
+        .filter(Boolean);
     const scenes = [];
     for (const message of lastMessages) {
         if (scenes.length >= MAX_SCENES) break;
         const clean = stripDecorations(message.text);
-        if (!clean.toLocaleLowerCase().includes(needle)) continue;
+        const lower = clean.toLocaleLowerCase();
+        if (!needles.some((needle) => lower.includes(needle))) continue;
         scenes.push(`[${message.id} | speaker=${message.speaker}]\n${clean.slice(0, MAX_SCENE_CHARS)}`);
     }
     return scenes.join('\n\n');
@@ -227,7 +282,10 @@ function buildScenesFor(candidate) {
 function npcPromptMessages(candidate, sceneText, existingContent = '') {
     const context = getContext();
     const mainNames = [context.name1, context.name2].filter(Boolean).join(', ');
-    const system = `You compile a factual profile card of one NPC from roleplay chat excerpts. Return JSON only, with no markdown.\n\nSchema:\n{"name":"","aliases":[""],"appearance":"","personality":"","speech_style":"","relationships":"","facts":[""],"example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}. Ignore every other character.\n- Describe only what the excerpts actually show or strongly imply; never invent details.\n- Write appearance, personality, speech_style, relationships, and facts in Korean.\n- example_lines must be lines spoken by the target NPC, copied verbatim in their original language from the excerpts. If unsure who spoke a line, omit it.\n- relationships describes how the NPC relates to the main characters (${mainNames}).\n- Leave a field as an empty string or empty array when the excerpts give no information.\n- Return at most 6 facts and 5 example_lines.`;
+    const alsoCalled = candidate.members?.length
+        ? ` This NPC is also referred to as: ${candidate.members.map((member) => JSON.stringify(member)).join(', ')}. Treat all of these as the same person.`
+        : '';
+    const system = `You compile a factual profile card of one NPC from roleplay chat excerpts. Return JSON only, with no markdown.\n\nSchema:\n{"name":"","aliases":[""],"appearance":"","personality":"","speech_style":"","relationships":"","facts":[""],"example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- Describe only what the excerpts actually show or strongly imply; never invent details.\n- Write appearance, personality, speech_style, relationships, and facts in Korean.\n- example_lines must be lines spoken by the target NPC, copied verbatim in their original language from the excerpts. If unsure who spoke a line, omit it.\n- relationships describes how the NPC relates to the main characters (${mainNames}).\n- Leave a field as an empty string or empty array when the excerpts give no information.\n- Return at most 6 facts and 5 example_lines.`;
     const existing = existingContent
         ? `\n\nAn earlier profile of this NPC exists. Merge it with the new excerpts and return the updated full profile:\n${existingContent.slice(0, 1500)}`
         : '';
@@ -324,6 +382,25 @@ async function confirmAction(title, message) {
     return true;
 }
 
+async function promptForName(defaultName) {
+    const popup = getContext().Popup;
+    try {
+        if (popup?.show?.input) {
+            const value = await popup.show.input('🎭NPC 캐스팅룸', '합친 NPC의 대표 이름을 정해 주세요.', defaultName);
+            if (value === null || value === undefined) return null;
+            return String(value).trim() || defaultName;
+        }
+    } catch (error) {
+        console.debug(`${LOG_PREFIX} 이름 입력 팝업 실패`, error);
+    }
+    if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+        const value = window.prompt('합친 NPC의 대표 이름', defaultName);
+        if (value === null) return null;
+        return String(value).trim() || defaultName;
+    }
+    return defaultName;
+}
+
 export async function createNpcLorebookEntry(candidate, { manual = true } = {}) {
     const context = getContext();
     if (generating) return { ok: false, reason: '이미 다른 NPC를 생성하는 중이에요.' };
@@ -363,6 +440,12 @@ export async function createNpcLorebookEntry(candidate, { manual = true } = {}) 
         );
         const npc = sanitizeNpcProfile(parseProfileResponse(response), sceneText, candidate.name);
         if (!npc) throw new Error('AI가 만든 프로필이 검증을 통과하지 못했어요.');
+        // Merged candidates: every member name must survive as a lorebook key
+        // so the entry triggers no matter which name the chat uses.
+        for (const member of candidate.members ?? []) {
+            if (member !== npc.name && !npc.aliases.includes(member)) npc.aliases.push(member);
+        }
+        npc.aliases = npc.aliases.slice(0, 7);
 
         const content = buildLorebookContent(npc);
         const keys = buildEntryKeys(npc);
@@ -458,7 +541,10 @@ async function generateFromUi(candidate) {
     } catch (error) {
         if (error?.name === 'AbortError') return;
         console.error(`${LOG_PREFIX} NPC 항목 생성 실패`, error);
-        toastr.error(`생성 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
+        const hint = /API request failed|Response not OK/i.test(String(error?.message))
+            ? ' — 선택한 연결 프로필에 API·모델·키가 전부 저장돼 있는지 확인하고, 안 되면 「현재 연결 사용」으로 테스트해 보세요.'
+            : '';
+        toastr.error(`생성 실패: ${error?.message ?? error}${hint}`, '🎭캐스팅룸');
     }
 }
 
@@ -488,14 +574,21 @@ function renderCandidates() {
 
         const head = document.createElement('div');
         head.className = 'npcc-item-head';
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'npcc-merge-check';
+        check.title = '합칠 후보 선택';
+        check.dataset.npccName = candidate.name;
         const title = document.createElement('div');
+        title.className = 'npcc-item-title';
         const name = document.createElement('div');
         name.className = 'npcc-item-name';
-        name.textContent = candidate.name;
+        name.textContent = candidate.merged ? `🔗 ${candidate.name}` : candidate.name;
         const meta = document.createElement('small');
-        meta.textContent = `답변 ${candidate.count}개 · 언급 ${candidate.mentions}회${candidate.dialogueLines.length ? ` · 대사 ${candidate.dialogueLines.length}개` : ''}`;
+        const mergedInfo = candidate.merged ? ` · 합침: ${candidate.members.join(' + ')}` : '';
+        meta.textContent = `답변 ${candidate.count}개 · 언급 ${candidate.mentions}회${candidate.dialogueLines.length ? ` · 대사 ${candidate.dialogueLines.length}개` : ''}${mergedInfo}`;
         title.append(name, meta);
-        head.append(title);
+        head.append(check, title);
 
         const evidence = document.createElement('details');
         evidence.className = 'npcc-evidence';
@@ -527,6 +620,18 @@ function renderCandidates() {
             updateUi();
         });
         actions.append(generate, dismiss);
+        if (candidate.merged) {
+            const unmerge = document.createElement('button');
+            unmerge.type = 'button';
+            unmerge.className = 'menu_button';
+            unmerge.textContent = '합침 해제';
+            unmerge.addEventListener('click', () => {
+                unmergeCandidateGroup(candidate.name);
+                scanCandidates();
+                updateUi();
+            });
+            actions.append(unmerge);
+        }
 
         article.append(head, evidence, actions);
         list.append(article);
@@ -669,6 +774,25 @@ function bindUi() {
         scanCandidates();
         updateUi();
         toastr.success('최근 답변을 다시 스캔했어요.', '🎭캐스팅룸');
+    });
+    document.getElementById('npcc-merge-selected')?.addEventListener('click', async () => {
+        const checked = [...document.querySelectorAll('#npcc-candidate-list .npcc-merge-check:checked')]
+            .map((element) => element.dataset.npccName)
+            .filter(Boolean);
+        if (checked.length < 2) {
+            toastr.info('합칠 후보를 2개 이상 체크해 주세요.', '🎭캐스팅룸');
+            return;
+        }
+        const defaultName = checked.join(' ');
+        const name = await promptForName(defaultName);
+        if (name === null) return;
+        if (!mergeCandidateGroup(checked, name)) {
+            toastr.error('후보를 합치지 못했어요.', '🎭캐스팅룸');
+            return;
+        }
+        scanCandidates();
+        updateUi();
+        toastr.success(`"${name || defaultName}"(으)로 합쳤어요. 두 이름 모두 로어북 키워드에 들어가요.`, '🎭캐스팅룸');
     });
     document.getElementById('npcc-clear-dismissed')?.addEventListener('click', () => {
         const settings = getSettings();

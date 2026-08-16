@@ -88,6 +88,39 @@
   font-size: 0.9em;
 }
 
+#npcc-settings .npcc-merge-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+#npcc-settings .npcc-merge-bar .menu_button {
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+#npcc-settings .npcc-merge-bar small {
+  min-width: 0;
+}
+
+#npcc-settings .npcc-item-head {
+  justify-content: flex-start;
+}
+
+#npcc-settings .npcc-merge-check {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+#npcc-settings .npcc-item-title {
+  min-width: 0;
+  flex: 1;
+}
+
 #npcc-settings .npcc-list {
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
 }

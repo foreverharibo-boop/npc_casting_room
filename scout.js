@@ -242,6 +242,37 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
     return results.sort((a, b) => b.score - a.score).slice(0, MAX_CANDIDATES);
 }
 
+/**
+ * Merge several detected candidates (e.g. "캘런" and "밴스" for one NPC called
+ * by given name and surname) into a single candidate under a display name.
+ */
+export function mergeCandidates(group, parts) {
+    const messageIds = [...new Set(parts.flatMap((part) => part.messageIds ?? []))];
+    const evidence = [];
+    const seenEvidence = new Set();
+    for (const part of parts) {
+        for (const item of part.evidence ?? []) {
+            if (seenEvidence.has(item.messageId)) continue;
+            seenEvidence.add(item.messageId);
+            evidence.push(item);
+        }
+    }
+    const dialogueLines = [...new Set(parts.flatMap((part) => part.dialogueLines ?? []))].slice(0, MAX_DIALOGUE_LINES);
+    const mentions = parts.reduce((sum, part) => sum + (Number(part.mentions) || 0), 0);
+    return {
+        name: group.name,
+        kind: 'merged',
+        merged: true,
+        members: [...group.members],
+        count: messageIds.length,
+        mentions,
+        messageIds,
+        evidence: evidence.slice(0, MAX_EVIDENCE),
+        dialogueLines,
+        score: messageIds.length * 10 + mentions + (dialogueLines.length ? 5 : 0),
+    };
+}
+
 function cleanProfileText(value, limit) {
     return String(value ?? '')
         .replace(/```[\s\S]*?```/g, ' ')
