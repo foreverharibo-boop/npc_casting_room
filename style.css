@@ -1,0 +1,214 @@
+#npcc-settings {
+  margin: 8px 0;
+}
+
+#npcc-settings .npcc-drawer-header,
+#npcc-settings .npcc-heading,
+#npcc-settings .npcc-header-actions,
+#npcc-settings .npcc-section-head,
+#npcc-settings .npcc-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#npcc-settings .npcc-heading {
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+#npcc-settings .npcc-heading > span {
+  font-size: 1.3em;
+}
+
+#npcc-settings .npcc-heading small,
+#npcc-settings .npcc-section-head small,
+#npcc-settings .npcc-item small,
+#npcc-settings .npcc-field-note,
+#npcc-settings .npcc-save-note {
+  display: block;
+  opacity: 0.72;
+  font-size: 0.88em;
+  line-height: 1.35;
+}
+
+#npcc-settings .npcc-master-label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+#npcc-settings .npcc-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+#npcc-settings .npcc-tab {
+  width: 100%;
+  margin: 0;
+}
+
+#npcc-settings .npcc-tab.is-active {
+  filter: brightness(1.15);
+  box-shadow: inset 0 -2px 0 var(--SmartThemeQuoteColor, currentColor);
+}
+
+#npcc-settings .npcc-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.7em;
+  min-height: 1.7em;
+  padding: 0 0.48em;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 999px;
+  font-size: 0.82em;
+  line-height: 1;
+}
+
+#npcc-settings .npcc-panel {
+  padding: 2px 0 8px;
+}
+
+#npcc-settings .npcc-section-head {
+  margin: 10px 0 6px;
+}
+
+#npcc-settings .npcc-section-head > div {
+  min-width: 0;
+}
+
+#npcc-settings .npcc-queue-note {
+  margin: 8px 0;
+  padding: 7px 9px;
+  border-left: 3px solid var(--SmartThemeQuoteColor, currentColor);
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor, transparent) 66%, transparent);
+  font-size: 0.9em;
+}
+
+#npcc-settings .npcc-list {
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+#npcc-settings .npcc-item {
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+#npcc-settings .npcc-item-name {
+  font-weight: 600;
+}
+
+#npcc-settings .npcc-evidence {
+  margin-top: 6px;
+  font-size: 0.88em;
+}
+
+#npcc-settings .npcc-evidence summary {
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+#npcc-settings .npcc-evidence-row {
+  margin-top: 5px;
+  opacity: 0.72;
+  overflow-wrap: anywhere;
+}
+
+/* All action buttons flow horizontally and never stretch full-width. */
+#npcc-settings .npcc-actions,
+#npcc-settings .npcc-button-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+#npcc-settings .npcc-actions {
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+#npcc-settings .npcc-button-row {
+  margin-top: 10px;
+}
+
+#npcc-settings .npcc-actions .menu_button,
+#npcc-settings .npcc-created-item .menu_button,
+#npcc-settings .npcc-button-row .menu_button,
+#npcc-settings .npcc-section-head .menu_button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+#npcc-settings .npcc-created-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 13%, transparent);
+}
+
+#npcc-settings .npcc-created-item > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#npcc-settings .npcc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 70px;
+  opacity: 0.72;
+  text-align: center;
+}
+
+#npcc-settings .npcc-empty > span:first-child {
+  font-size: 1.3em;
+}
+
+#npcc-settings .npcc-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 46%);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+}
+
+#npcc-settings .npcc-field .text_pole {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+#npcc-settings .npcc-field-note {
+  margin: 4px 0 8px;
+}
+
+#npcc-settings .npcc-save-note {
+  margin-top: 9px;
+  text-align: center;
+}
+
+#npcc-settings [hidden] {
+  display: none !important;
+}
+
+@media (max-width: 520px) {
+  #npcc-settings .npcc-field {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}

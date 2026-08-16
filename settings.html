@@ -1,0 +1,101 @@
+<div id="npcc-settings" class="npcc-settings">
+  <div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header npcc-drawer-header">
+      <div class="npcc-heading">
+        <span aria-hidden="true">🎭</span>
+        <div>
+          <b>NPC 캐스팅룸</b>
+          <small id="npcc-header-status">새 NPC를 기다리는 중이에요</small>
+        </div>
+      </div>
+      <div class="npcc-header-actions">
+        <label class="checkbox_label npcc-master-label" title="캐스팅룸 전체 사용">
+          <input id="npcc-enabled" type="checkbox">
+          <span>사용</span>
+        </label>
+        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+      </div>
+    </div>
+
+    <div class="inline-drawer-content">
+      <div class="npcc-tabs" role="tablist" aria-label="캐스팅룸 메뉴">
+        <button id="npcc-tab-candidates" class="menu_button npcc-tab is-active" type="button" role="tab" aria-selected="true" data-npcc-tab="candidates">
+          캐스팅 후보 <span id="npcc-candidate-count" class="npcc-count">0</span>
+        </button>
+        <button id="npcc-tab-settings" class="menu_button npcc-tab" type="button" role="tab" aria-selected="false" data-npcc-tab="settings">설정</button>
+      </div>
+
+      <section id="npcc-panel-candidates" class="npcc-panel" role="tabpanel" aria-labelledby="npcc-tab-candidates">
+        <div class="npcc-section-head">
+          <div>
+            <strong>캐스팅 후보</strong>
+            <small>카드에 없는 이름이 반복 등장하면 여기에 올라와요</small>
+          </div>
+          <button id="npcc-rescan" class="menu_button" type="button">
+            <i class="fa-solid fa-rotate" aria-hidden="true"></i> 다시 스캔
+          </button>
+        </div>
+        <div id="npcc-queue-note" class="npcc-queue-note" hidden></div>
+        <div id="npcc-candidate-list" class="npcc-list"></div>
+        <div id="npcc-empty" class="npcc-empty" hidden>
+          <span aria-hidden="true">🎬</span>
+          <span>아직 캐스팅 후보가 없어요</span>
+        </div>
+
+        <div class="npcc-section-head">
+          <div>
+            <strong>데뷔한 NPC</strong>
+            <small>캐스팅룸이 만든 로어북 항목이에요. 갱신하면 새 등장 장면까지 반영해요.</small>
+          </div>
+        </div>
+        <div id="npcc-created-list" class="npcc-list"></div>
+        <div id="npcc-created-empty" class="npcc-empty" hidden>
+          <span>아직 데뷔한 NPC가 없어요</span>
+        </div>
+      </section>
+
+      <section id="npcc-panel-settings" class="npcc-panel" role="tabpanel" aria-labelledby="npcc-tab-settings" hidden>
+        <label class="npcc-field" for="npcc-target">
+          <span>로어북 저장 위치</span>
+          <select id="npcc-target" class="text_pole">
+            <option value="character">캐릭터 로어북 (새 챗에도 유지)</option>
+            <option value="chat">채팅 로어북 (이 채팅만)</option>
+          </select>
+        </label>
+        <small id="npcc-target-note" class="npcc-field-note"></small>
+
+        <label class="npcc-field" for="npcc-window-size">
+          <span>스캔 범위</span>
+          <select id="npcc-window-size" class="text_pole">
+            <option value="20">최근 답변 20개</option>
+            <option value="30">최근 답변 30개</option>
+            <option value="50">최근 답변 50개</option>
+          </select>
+        </label>
+
+        <label class="npcc-field" for="npcc-min-messages">
+          <span>후보 기준</span>
+          <select id="npcc-min-messages" class="text_pole">
+            <option value="2">답변 2개 이상 등장</option>
+            <option value="3">답변 3개 이상 등장</option>
+            <option value="4">답변 4개 이상 등장</option>
+          </select>
+        </label>
+
+        <label class="npcc-field" for="npcc-profile">
+          <span>프로필 생성 연결</span>
+          <select id="npcc-profile" class="text_pole">
+            <option value="">현재 연결 사용</option>
+          </select>
+        </label>
+        <small class="npcc-field-note">별도 Connection Profile을 고르면 메인 연결과 완전히 분리된 백그라운드 경로로 요청해서, 채팅 생성 중에도 겹치지 않아요. 「현재 연결 사용」인 경우에는 채팅 생성이 끝날 때까지 기다렸다가 자동으로 실행해요.</small>
+
+        <div class="npcc-button-row">
+          <button id="npcc-clear-dismissed" class="menu_button" type="button">무시 목록 초기화</button>
+        </div>
+
+        <small class="npcc-save-note">설정은 변경 즉시 저장돼요. 이름 감지는 브라우저 안에서만 처리되고, API는 「로어북 생성」·「갱신」을 누를 때만 사용해요.</small>
+      </section>
+    </div>
+  </div>
+</div>
