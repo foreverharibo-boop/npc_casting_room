@@ -23,7 +23,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.5.2';
+const EXTENSION_VERSION = '1.5.3';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -73,6 +73,11 @@ function getSettings() {
         ...(current && typeof current === 'object' ? current : {}),
     };
     const settings = context.extensionSettings[MODULE_NAME];
+    // SillyTavern already controls whether the extension is enabled. The
+    // redundant master checkbox was removed from the drawer header, so migrate
+    // any old saved "off" value to active instead of leaving the extension
+    // stuck without a visible control that can turn it back on.
+    settings.enabled = true;
     settings.dismissed = settings.dismissed && typeof settings.dismissed === 'object' ? settings.dismissed : {};
     settings.createdEntries = settings.createdEntries && typeof settings.createdEntries === 'object' ? settings.createdEntries : {};
     settings.mergedGroups = settings.mergedGroups && typeof settings.mergedGroups === 'object' ? settings.mergedGroups : {};
@@ -862,7 +867,6 @@ function setTab(tabName) {
 function updateUi() {
     if (!uiReady) return;
     const settings = getSettings();
-    document.getElementById('npcc-enabled').checked = settings.enabled;
     document.getElementById('npcc-window-size').value = String(settings.windowSize);
     document.getElementById('npcc-min-messages').value = String(settings.minMessages);
     document.getElementById('npcc-target').value = settings.lorebookTarget;
@@ -892,11 +896,6 @@ function updateUi() {
             ? `⏳ "${queuedCandidate.name}" 항목은 메인 연결의 채팅 생성이 끝나면 자동으로 만들어져요.`
             : '';
     }
-    const header = document.getElementById('npcc-header-status');
-    if (!settings.enabled) header.textContent = '현재 꺼져 있어요';
-    else if (generating) header.textContent = 'AI가 프로필을 만드는 중이에요';
-    else if (queuedCandidate) header.textContent = '메인 생성이 끝나면 이어서 만들 예정이에요';
-    else header.textContent = lastCandidates.length ? `캐스팅 후보 ${lastCandidates.length}명 대기 중` : '새 NPC를 기다리는 중이에요';
     const targetNote = document.getElementById('npcc-target-note');
     if (targetNote) {
         targetNote.textContent = isGroupChat()
@@ -928,7 +927,6 @@ function bindUi() {
         button.addEventListener('click', () => setTab(button.dataset.npccTab));
     });
 
-    bindSetting('npcc-enabled', 'enabled', Boolean);
     bindSetting('npcc-window-size', 'windowSize', (value) => {
         const parsed = Math.round(Number(value));
         return Number.isFinite(parsed) && parsed > 0
@@ -1023,7 +1021,7 @@ async function initializeUi() {
     container.insertAdjacentHTML('beforeend', html);
     // A wrong template path can resolve to a 404 page instead of throwing.
     // Verify our actual markup arrived before wiring anything up.
-    if (!document.getElementById('npcc-enabled')) {
+    if (!document.getElementById('npcc-candidate-list')) {
         document.getElementById('npcc-settings')?.remove();
         throw new Error(`설정 템플릿을 불러오지 못했습니다 (경로: ${EXTENSION_PATH}). 설치 폴더 구조를 확인해 주세요.`);
     }

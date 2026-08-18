@@ -1,10 +1,9 @@
 #npcc-settings {
-  margin: 8px 0;
+  margin: 0;
 }
 
 #npcc-settings .npcc-drawer-header,
 #npcc-settings .npcc-heading,
-#npcc-settings .npcc-header-actions,
 #npcc-settings .npcc-section-head,
 #npcc-settings .npcc-item-head {
   display: flex;
@@ -15,11 +14,12 @@
 
 #npcc-settings .npcc-heading {
   justify-content: flex-start;
+  gap: 0.25em;
   min-width: 0;
 }
 
 #npcc-settings .npcc-heading > span {
-  font-size: 1.3em;
+  font-size: 1em;
 }
 
 #npcc-settings .npcc-heading small,
@@ -31,11 +31,6 @@
   opacity: 0.72;
   font-size: 0.88em;
   line-height: 1.35;
-}
-
-#npcc-settings .npcc-master-label {
-  margin: 0;
-  white-space: nowrap;
 }
 
 #npcc-settings .npcc-tabs {
