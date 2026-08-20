@@ -64,6 +64,18 @@ test('페르소나·캐릭터 이름의 소유격은 후보로 잡지 않고, NP
     assert.equal(marcus.count, 2);
 });
 
+test('영어 축약형과 소유격으로만 나온 일반 단어는 NPC 후보로 잡지 않는다', () => {
+    const messages = [
+        { id: 'm1', text: "He said I'm late, but you're early and he'll wait." },
+        { id: 'm2', text: "She knows I'm ready, we'd agreed, and they can't object." },
+        { id: 'm3', text: "Now I’m certain, they've left, and life's strange." },
+    ];
+    const names = detectNpcCandidates(messages, []).map((candidate) => candidate.name);
+    assert.equal(names.includes("I'm"), false);
+    assert.equal(names.includes('Life'), false);
+    assert.deepEqual(names, []);
+});
+
 test('흔한 한국어 단어와 대명사는 후보로 잡지 않는다', () => {
     const messages = [
         { id: 'm1', text: '그녀가 목소리를 낮추며 고개를 저었다.' },

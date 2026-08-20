@@ -23,7 +23,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.5.3';
+const EXTENSION_VERSION = '1.5.4';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -239,12 +239,13 @@ export function resolveTargetBook() {
         const metadata = context.chatMetadata;
         if (!metadata || typeof metadata !== 'object') return null;
         let name = typeof metadata[CHAT_LOREBOOK_METADATA_KEY] === 'string' ? metadata[CHAT_LOREBOOK_METADATA_KEY].trim() : '';
+        const createIfMissing = !name;
         if (!name) {
             name = sanitizeBookName(`캐스팅룸-챗-${context.chatId ?? 'chat'}`);
             metadata[CHAT_LOREBOOK_METADATA_KEY] = name;
             if (typeof context.saveMetadataDebounced === 'function') context.saveMetadataDebounced();
         }
-        return { name, binding: 'chat' };
+        return { name, binding: 'chat', createIfMissing };
     }
     const character = context.characters?.[Number(context.characterId)];
     if (!character) return null;
@@ -252,9 +253,9 @@ export function resolveTargetBook() {
     if (typeof primary === 'string' && primary.trim()) {
         // Respect an existing character lorebook: add NPC entries to it
         // instead of competing with a second book.
-        return { name: primary.trim(), binding: 'existing' };
+        return { name: primary.trim(), binding: 'existing', createIfMissing: false };
     }
-    return { name: sanitizeBookName(`캐스팅룸-${character.name ?? 'character'}`), binding: 'new-character' };
+    return { name: sanitizeBookName(`캐스팅룸-${character.name ?? 'character'}`), binding: 'new-character', createIfMissing: true };
 }
 
 async function getWorldApi() {
@@ -289,11 +290,26 @@ function buildScenesFor(candidate) {
     for (const message of lastMessages) {
         if (scenes.length >= MAX_SCENES) break;
         const clean = stripDecorations(message.text);
-        const lower = clean.toLocaleLowerCase();
-        if (!needles.some((needle) => lower.includes(needle))) continue;
+        if (!needles.some((needle) => containsName(clean, needle))) continue;
         scenes.push(`[${message.id} | speaker=${message.speaker}]\n${clean.slice(0, MAX_SCENE_CHARS)}`);
     }
     return scenes.join('\n\n');
+}
+
+function containsName(text, name) {
+    const haystack = String(text ?? '').replace(/’/g, "'");
+    const needle = String(name ?? '').trim().replace(/’/g, "'");
+    if (!needle) return false;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (/^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*)*$/.test(needle)) {
+        return new RegExp(`(^|[^A-Za-z])${escaped}(?=$|[^A-Za-z])`, 'i').test(haystack);
+    }
+    if (/^[가-힣]{2,}$/.test(needle)) {
+        // Korean particles attach to names, so only the left edge can be a
+        // strict Hangul boundary. This still prevents 민수 from matching 김민수.
+        return new RegExp(`(^|[^가-힣])${escaped}`, 'u').test(haystack);
+    }
+    return haystack.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
 }
 
 function referenceSheetText() {
@@ -590,12 +606,19 @@ export async function saveNpcDraft(draft) {
     const existing = tracked.find((item) => item.name.toLocaleLowerCase() === draft.npcName.toLocaleLowerCase());
 
     let data = null;
+    let loadError = null;
     try {
         data = await worldApi.loadWorldInfo(target.name);
-    } catch {
-        data = null;
+    } catch (error) {
+        loadError = error;
     }
     if (!data || typeof data !== 'object' || !data.entries || typeof data.entries !== 'object') {
+        // Never turn a temporary read failure into an overwrite of an existing
+        // lorebook. Empty data is valid only for a book we are creating now.
+        if (!target.createIfMissing) {
+            const detail = loadError?.message ? ` (${loadError.message})` : '';
+            throw new Error(`기존 로어북 "${target.name}"을 읽지 못해 안전을 위해 저장을 중단했어요.${detail}`);
+        }
         data = { entries: {} };
     }
 
@@ -619,12 +642,17 @@ export async function saveNpcDraft(draft) {
         const writeField = await getWriteExtensionField();
         const characterId = Number(context.characterId);
         if (typeof writeField === 'function') {
-            await writeField(characterId, 'world', target.name);
-            const character = context.characters?.[characterId];
-            if (character) {
-                character.data = character.data && typeof character.data === 'object' ? character.data : {};
-                character.data.extensions = character.data.extensions && typeof character.data.extensions === 'object' ? character.data.extensions : {};
-                character.data.extensions.world = target.name;
+            try {
+                await writeField(characterId, 'world', target.name);
+                const character = context.characters?.[characterId];
+                if (character) {
+                    character.data = character.data && typeof character.data === 'object' ? character.data : {};
+                    character.data.extensions = character.data.extensions && typeof character.data.extensions === 'object' ? character.data.extensions : {};
+                    character.data.extensions.world = target.name;
+                }
+            } catch (error) {
+                console.warn(`${LOG_PREFIX} 카드 로어북 자동 연결 실패`, error);
+                bindingNote = ' 카드 자동 연결에는 실패했으니 캐릭터 패널의 🌐 버튼에서 이 로어북을 직접 선택해 주세요.';
             }
         } else {
             bindingNote = ' 카드 자동 연결에는 실패했으니 캐릭터 패널의 🌐 버튼에서 이 로어북을 직접 선택해 주세요.';
@@ -796,7 +824,10 @@ function renderCreated() {
     const empty = document.getElementById('npcc-created-empty');
     if (!list || !empty) return;
     const settings = getSettings();
-    const entries = Object.values(settings.createdEntries).flat().filter(Boolean);
+    const targetBook = currentBookNameForUi();
+    const entries = targetBook && Array.isArray(settings.createdEntries[targetBook])
+        ? settings.createdEntries[targetBook].filter(Boolean)
+        : [];
     list.replaceChildren();
     for (const entry of entries) {
         const row = document.createElement('div');
@@ -818,6 +849,22 @@ function renderCreated() {
     }
     empty.hidden = entries.length !== 0;
     list.hidden = entries.length === 0;
+}
+
+function currentBookNameForUi() {
+    const context = getContext();
+    const settings = getSettings();
+    if (settings.lorebookTarget === 'chat' || isGroupChat(context)) {
+        return typeof context.chatMetadata?.[CHAT_LOREBOOK_METADATA_KEY] === 'string'
+            ? context.chatMetadata[CHAT_LOREBOOK_METADATA_KEY].trim()
+            : '';
+    }
+    const character = context.characters?.[Number(context.characterId)];
+    if (!character) return '';
+    const primary = character?.data?.extensions?.world;
+    return typeof primary === 'string' && primary.trim()
+        ? primary.trim()
+        : sanitizeBookName(`캐스팅룸-${character.name ?? 'character'}`);
 }
 
 function populateProfiles() {

@@ -109,6 +109,22 @@ test('카드에 이미 로어북이 있으면 그 로어북에 항목을 추가�
     module.onDisable();
 });
 
+test('기존 로어북 읽기에 실패하면 빈 데이터로 덮어쓰지 않는다', async () => {
+    const saved = [];
+    const context = makeContext({
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '중요한월드' } } }],
+        loadWorldInfo: async () => { throw new Error('temporary read failure'); },
+        saveWorldInfo: async (name, data) => saved.push({ name, data }),
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?load-failure=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    await assert.rejects(() => module.createNpcLorebookEntry(candidate), /읽지 못해.*저장을 중단/);
+    assert.equal(saved.length, 0);
+    module.onDisable();
+});
+
 test('그룹챗에서는 채팅 로어북으로 저장하고 메타데이터에 연결한다', async () => {
     const saved = [];
     const context = makeContext({
@@ -336,7 +352,7 @@ test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한
                 example_lines: [],
             });
         },
-        loadWorldInfo: async () => null,
+        loadWorldInfo: async () => saved.at(-1)?.data ?? null,
         saveWorldInfo: async (name, data) => saved.push({ name, data }),
         writeExtensionField: async () => {},
     });

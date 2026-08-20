@@ -22,7 +22,14 @@ const EN_COMMON_WORDS = new Set([
     'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october',
     'november', 'december', 'morning', 'evening', 'night', 'today', 'tomorrow', 'yesterday',
     'chapter', 'info', 'status', 'date', 'weather', 'location', 'inventory',
+    'because', 'however', 'although', 'instead', 'meanwhile', 'suddenly', 'finally', 'later', 'earlier',
+    'anyway', 'somehow', 'already', 'never', 'always', 'sometimes', 'often', 'could', 'would', 'should',
+    'did', 'does', 'doing', 'have', 'has', 'had', 'having', 'been', 'being', 'let', 'everyone', 'everybody',
+    'somebody', 'anybody', 'nobody', 'one', 'thing',
 ]);
+
+const WORD_PATTERN = /[A-Za-z][A-Za-z'’\-]*|[가-힣]+/g;
+const EN_CONTRACTION_ENDING = /'(?:m|re|ve|ll|d|t)$/i;
 
 // Frequent Korean two-plus-syllable stems that are not personal names.
 const KO_COMMON_STEMS = new Set([
@@ -139,7 +146,7 @@ function buildKnownSet(names) {
         const clean = String(name ?? '').trim();
         if (!clean) continue;
         known.add(clean.toLocaleLowerCase());
-        for (const token of clean.match(/[A-Za-z][A-Za-z''-]*|[가-힣]+/g) ?? []) {
+        for (const token of clean.match(WORD_PATTERN) ?? []) {
             if (token.length >= 2) known.add(token.toLocaleLowerCase());
         }
     }
@@ -167,6 +174,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
                 dialogueLines: [],
                 hasSuffixForm: false,
                 hasMidSentence: false,
+                hasBareForm: false,
                 kind: flags.kind,
             });
         }
@@ -175,6 +183,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
         entry.messageIds.add(messageId);
         entry.hasSuffixForm ||= Boolean(flags.suffixForm);
         entry.hasMidSentence ||= Boolean(flags.midSentence);
+        entry.hasBareForm ||= Boolean(flags.bareForm);
         if (!entry.evidence.has(messageId)) entry.evidence.set(messageId, sentence.slice(0, 200));
         for (const quote of flags.quotes ?? []) {
             if (entry.dialogueLines.length >= MAX_DIALOGUE_LINES) break;
@@ -187,19 +196,25 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
         if (!clean) continue;
         for (const sentence of splitSentences(clean)) {
             const quotes = extractQuotes(sentence);
-            const tokens = [...sentence.matchAll(/[A-Za-z][A-Za-z''-]*|[가-힣]+/g)];
+            const tokens = [...sentence.matchAll(WORD_PATTERN)];
             for (const [tokenIndex, tokenMatch] of tokens.entries()) {
                 const token = tokenMatch[0];
-                if (/^[A-Z][a-z''-]{2,}$/.test(token)) {
+                const normalizedEnglish = token.replace(/’/g, "'");
+                if (/^[A-Z][a-z'\-]{2,}$/.test(normalizedEnglish)) {
+                    // English contractions such as "I'm", "we're", "he'll",
+                    // "I'd" and "can't" are capitalized words, not names.
+                    if (EN_CONTRACTION_ENDING.test(normalizedEnglish)) continue;
                     // Possessives ("Dana's", "Marcus'") are the same name, not
                     // a new one — strip them before the known-name check.
-                    const stem = token.replace(/['']s?$/i, '');
+                    const possessive = /'(?:s)?$/i.test(normalizedEnglish);
+                    const stem = normalizedEnglish.replace(/'(?:s)?$/i, '');
                     if (stem.length < 3) continue;
                     const lower = stem.toLocaleLowerCase();
                     if (EN_COMMON_WORDS.has(lower) || known.has(lower)) continue;
                     record(lower, stem, message.id, sentence, {
                         kind: 'en',
                         midSentence: tokenIndex > 0,
+                        bareForm: !possessive,
                         quotes,
                     });
                     continue;
@@ -229,7 +244,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
         // English names must appear mid-sentence at least once; Korean stems
         // must have appeared with a particle attached at least once. Both cut
         // most non-name noise while keeping real names.
-        if (entry.kind === 'en' && !entry.hasMidSentence) continue;
+        if (entry.kind === 'en' && (!entry.hasMidSentence || !entry.hasBareForm)) continue;
         if (entry.kind === 'ko' && !entry.hasSuffixForm) continue;
         results.push({
             name: entry.display,
