@@ -24,7 +24,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.6';
+const EXTENSION_VERSION = '1.6.7';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -136,6 +136,9 @@ export function collectRecentMessages() {
 export function knownCharacterNames() {
     const context = getContext();
     const names = [context.name1, context.name2];
+    for (const message of Array.isArray(context.chat) ? context.chat : []) {
+        if (message?.is_user && message.name) names.push(message.name);
+    }
     for (const character of Array.isArray(context.characters) ? context.characters : []) {
         if (character?.name) names.push(character.name);
     }

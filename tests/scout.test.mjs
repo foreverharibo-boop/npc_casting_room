@@ -107,6 +107,17 @@ test('흔한 한국어 단어와 대명사는 후보로 잡지 않는다', () =>
     assert.equal(detectNpcCandidates(messages, []).length, 0);
 });
 
+test('반복된 신체·사물·동사 조각 대신 사람처럼 행동한 이름만 감지한다', () => {
+    const messages = [
+        { id: 'm1', text: '담은이 침대 위로 앉았다. 신의 손가락이 그녀의 허리에 닿았다. 막내 시우가 소파에 앉아 칭얼거렸다.' },
+        { id: 'm2', text: '담은은 손가락을 쥐고 신의 쪽으로 걸었다. 시우는 고개를 저으며 말했다.' },
+        { id: 'm3', text: '하지 말라고 해도 전까지 쌓인 열기가 침대 위로 퍼졌다. 시우가 웃으며 손을 흔들었다.' },
+        { id: 'm4', text: '기사 때문에 핏대가 섰다. 손가락이 다시 침대 끝을 짚었다.' },
+    ];
+    const names = detectNpcCandidates(messages, ['혜담은', '신']).map((candidate) => candidate.name);
+    assert.deepEqual(names, ['시우']);
+});
+
 test('인포패널과 태그 블록 안의 이름은 감지하지 않는다', () => {
     const messages = [
         { id: 'm1', text: '<Info_panel>[Bartender: 민수]</Info_panel>\n그는 혼자 술을 마셨다.' },

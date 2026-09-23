@@ -53,6 +53,22 @@ test('카드에 없는 NPC를 스캔하고 카드 캐릭터는 제외한다', as
     module.onDisable();
 });
 
+test('채팅 사용자 이름도 NPC 후보에서 제외한다', async () => {
+    const context = makeContext({
+        name1: '다른 표시명',
+        chat: [
+            { name: '담은', is_user: true, mes: '나 여기 있어.' },
+            { name: 'Peter', mes: '담은이 웃으며 고개를 끄덕였다.' },
+            { name: 'Peter', mes: '담은은 소파에 앉아 말했다.' },
+        ],
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?persona=${Date.now()}`);
+    assert.equal(module.scanCandidates().some((candidate) => candidate.name === '담은'), false);
+    module.onDisable();
+});
+
 test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연결한다', async () => {
     const saved = [];
     const fieldWrites = [];

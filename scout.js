@@ -54,6 +54,11 @@ const KO_COMMON_STEMS = new Set([
     '함께', '문득', '잠시', '고개', '숨결', '입술', '어깨', '대답', '질문', '이야기', '모습', '느낌',
     '소리', '기분', '표정', '분위기', '상대', '상황', '문제', '이유', '대화', '자리', '주변', '근처',
     '하나', '무언가', '누군가', '어딘가', '스스로', '온몸', '심장', '숨소리', '한숨', '눈빛', '눈동자',
+    '위로', '손가락', '하지', '쪽으', '허리', '열기', '침대', '들어', '공기', '기사', '속에서',
+    '에어컨', '사이', '목덜미', '당장', '바닥', '전까지', '체온', '이내', '너머', '바람',
+    '위에', '골반', '안쪽', '없어', '손바닥', '이성', '아까', '억울함', '소유욕', '아니',
+    '매트리스', '뻗어', '핏대', '머리카락', '머릿속',
+    '쾌감', '맞닿', '기세', '번화', '땀방울', '그제', '더욱', '뒤에', '갈아',
 ]);
 const KO_PLACE_STEMS = new Set([
     '서울', '인천', '부산', '대구', '대전', '광주', '울산', '세종', '제주', '경기',
@@ -69,6 +74,9 @@ const KO_SUFFIXES = [
 ].sort((left, right) => right.length - left.length);
 
 const QUOTE_PATTERN = /"([^"\n]{2,})"|“([^”\n]{2,})”|‘([^’\n]{2,})’|「([^」\n]{2,})」|『([^』\n]{2,})』/g;
+const KO_ACTOR_SUFFIX = /(?:께서는|께서|씨는|씨가|님은|님이|은|는|이|가)$/u;
+const KO_PERSON_ACTION = /(?:말하|말했|물었|묻고|대답하|대답했|웃었|웃으며|웃고|울었|울며|외쳤|속삭였|중얼거렸|부르|불렀|쳐다봤|바라봤|고개를|시선을|코웃음|앉았|앉아|일어섰|일어나|들어왔|나갔|걸어왔|걸어갔|다가왔|다가갔|다가오|다가가|고개를 저|으쓱|칭얼거렸|스쳐 지나갔|떠났|떠올렸|도착했|돌아왔|손을 내밀|손을 뻗|잔을 건넸|잔을 닦)/u;
+const KO_PERSON_ADDRESS = /(?:씨|님|께서)$/u;
 
 export function stripAllPairedTagBlocks(text) {
     const input = String(text ?? '');
@@ -151,11 +159,25 @@ function extractQuotes(sentence) {
 
 function koreanStem(token) {
     for (const suffix of KO_SUFFIXES) {
-        if (token.length - suffix.length >= 2 && token.endsWith(suffix)) {
+        if (token.endsWith(suffix)) {
+            // Never retry a shorter suffix: "쪽으로" must not become "쪽으"+"로".
+            if (token.length - suffix.length < 2) return '';
             return token.slice(0, token.length - suffix.length);
         }
     }
     return '';
+}
+
+function hasKoreanPersonContext(sentence, token, index) {
+    if (KO_PERSON_ADDRESS.test(token)) return true;
+    if (!KO_ACTOR_SUFFIX.test(token)) return false;
+    const following = sentence.slice(index + token.length, index + token.length + 44)
+        .split(/[,.!?。！？\n]/u, 1)[0];
+    const action = KO_PERSON_ACTION.exec(following);
+    if (!action) return false;
+    // "쾌감이 번졌다. 신은 웃었다" does not make 쾌감 a person.
+    const beforeAction = following.slice(0, action.index);
+    return !/[가-힣]{2,6}(?:은|는|이|가)\s/u.test(beforeAction);
 }
 
 function buildKnownSet(names) {
@@ -164,6 +186,8 @@ function buildKnownSet(names) {
         const clean = String(name ?? '').trim();
         if (!clean) continue;
         known.add(clean.toLocaleLowerCase());
+        // A three-syllable Korean full name is often shortened to its given name.
+        if (/^[가-힣]{3}$/.test(clean)) known.add(clean.slice(1));
         for (const token of clean.match(WORD_PATTERN) ?? []) {
             if (token.length >= 2) known.add(token.toLocaleLowerCase());
         }
@@ -190,6 +214,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
                 messageIds: new Set(),
                 evidence: new Map(),
                 dialogueLines: [],
+                personMessageIds: new Set(),
                 hasSuffixForm: false,
                 hasMidSentence: false,
                 hasBareForm: false,
@@ -202,6 +227,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
         entry.hasSuffixForm ||= Boolean(flags.suffixForm);
         entry.hasMidSentence ||= Boolean(flags.midSentence);
         entry.hasBareForm ||= Boolean(flags.bareForm);
+        if (flags.personCue) entry.personMessageIds.add(messageId);
         if (!entry.evidence.has(messageId)) entry.evidence.set(messageId, sentence.slice(0, 200));
         for (const quote of flags.quotes ?? []) {
             if (entry.dialogueLines.length >= MAX_DIALOGUE_LINES) break;
@@ -250,6 +276,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
                         record(`ko:${value}`, value, message.id, sentence, {
                             kind: 'ko',
                             suffixForm,
+                            personCue: hasKoreanPersonContext(sentence, token, tokenMatch.index),
                             midSentence: true,
                             quotes,
                         });
@@ -267,7 +294,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
         // must have appeared with a particle attached at least once. Both cut
         // most non-name noise while keeping real names.
         if (entry.kind === 'en' && (!entry.hasMidSentence || !entry.hasBareForm)) continue;
-        if (entry.kind === 'ko' && !entry.hasSuffixForm) continue;
+        if (entry.kind === 'ko' && (!entry.hasSuffixForm || !entry.personMessageIds.size)) continue;
         results.push({
             name: entry.display,
             kind: entry.kind,
