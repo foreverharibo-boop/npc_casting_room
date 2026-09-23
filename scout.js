@@ -195,6 +195,50 @@ function buildKnownSet(names) {
     return known;
 }
 
+/** Verify model suggestions against the actual chat before showing them. */
+export function validateAiNpcCandidates(raw, messages, knownNames = [], options = {}) {
+    const known = buildKnownSet(knownNames);
+    const minMessages = Math.max(2, Number(options.minMessages) || 2);
+    const items = Array.isArray(raw?.npcs) ? raw.npcs : [];
+    const results = [];
+    const seen = new Set();
+    for (const item of items.slice(0, 100)) {
+        const name = String(item?.name ?? '').trim();
+        const lower = name.toLocaleLowerCase();
+        if (!name || name.length > 80 || seen.has(lower) || known.has(lower)) continue;
+        if (!/^(?:[가-힣]{2,6}(?:\s+[가-힣]{2,6})?|[A-Za-z][A-Za-z'’\-]*(?:\s+[A-Za-z][A-Za-z'’\-]*){0,3})$/u.test(name)) continue;
+        if (EN_COMMON_WORDS.has(lower) || EN_PLACE_NAMES.has(lower) ||
+            name.split(/\s+/).some((part) => EN_PLACE_DESIGNATORS.has(part.toLocaleLowerCase())) ||
+            KO_COMMON_STEMS.has(name) || KO_PLACE_STEMS.has(name)) continue;
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = /^[가-힣\s]+$/u.test(name)
+            ? new RegExp(`(^|[^가-힣])${escaped}`, 'u')
+            : new RegExp(`(^|[^A-Za-z])${escaped}(?=$|[^A-Za-z])`, 'i');
+        const matches = (messages ?? []).map((message) => ({ message, clean: stripDecorations(message?.text) }))
+            .filter(({ clean }) => pattern.test(clean));
+        if (matches.length < minMessages) continue;
+        // Require a short, verbatim quote mentioning the name in the chat.
+        // A model-generated name or unsupported person claim cannot pass.
+        const quotes = Array.isArray(item?.evidence) ? item.evidence : [];
+        const grounded = quotes.map((quote) => String(quote ?? '').trim())
+            .filter((quote) => quote.length >= name.length + 3 && quote.length <= 300 && pattern.test(quote) &&
+                matches.some(({ clean }) => clean.includes(quote)));
+        if (!grounded.length) continue;
+        seen.add(lower);
+        const evidence = matches.slice(0, 10).map(({ message, clean }) => {
+            const quote = grounded.find((value) => clean.includes(value));
+            const position = clean.search(pattern);
+            return { messageId: message.id, snippet: (quote || clean.slice(Math.max(0, position - 75), position + 125)).slice(0, 200) };
+        });
+        results.push({
+            name, kind: 'ai', count: matches.length, mentions: matches.length,
+            messageIds: matches.map(({ message }) => message.id), evidence, dialogueLines: [],
+            score: matches.length * 10 + grounded.length,
+        });
+    }
+    return results.sort((a, b) => b.score - a.score).slice(0, MAX_CANDIDATES);
+}
+
 /**
  * Find NPC candidates: repeated names that are absent from every known
  * character card. Local heuristic only; false positives are expected and the

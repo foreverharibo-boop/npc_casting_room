@@ -42,6 +42,36 @@ function makeContext(overrides = {}) {
     };
 }
 
+test('다시 스캔은 API 호출이 없고 AI 스캔은 원문으로 확인된 NPC만 올린다', async () => {
+    let apiCalls = 0;
+    const context = makeContext({
+        chat: [
+            { name: 'Peter', mes: '라온이 웃으며 문을 열었다. 서울에서 왔다.' },
+            { name: 'Peter', mes: '라온은 손을 흔들며 인사했다. 서울은 멀었다.' },
+        ],
+        generateRaw: async () => {
+            apiCalls += 1;
+            return JSON.stringify({ npcs: [
+                { name: '라온', evidence: ['라온이 웃으며 문을 열었다.'] },
+                { name: 'Raon', evidence: ['라온이 웃으며 문을 열었다.'] },
+                { name: '서울', evidence: ['서울에서 왔다.'] },
+            ] });
+        },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?ai-scan=${Date.now()}`);
+    module.scanCandidates();
+    assert.equal(apiCalls, 0);
+    const result = await module.scanCandidatesWithAi();
+    assert.deepEqual(result, { ok: true, count: 1 });
+    assert.equal(apiCalls, 1);
+    assert.equal(module.ignoreCandidates(['라온', '목록에 없음']), 1);
+    assert.equal(context.extensionSettings.npcCastingRoom.dismissed['card:peter.png'].includes('라온'), true);
+    assert.equal(module.scanCandidates().some((item) => item.name === '라온'), false);
+    module.onDisable();
+});
+
 test('카드에 없는 NPC를 스캔하고 카드 캐릭터는 제외한다', async () => {
     const context = makeContext();
     globalThis.SillyTavern = { getContext: () => context };

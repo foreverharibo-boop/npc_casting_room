@@ -167,6 +167,23 @@
 
 #npcc-settings .npcc-merge-bar small {
   min-width: 0;
+  flex-basis: 100%;
+}
+
+#npcc-settings .npcc-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#npcc-settings .npcc-select-all input {
+  margin: 0;
+}
+
+#npcc-settings .npcc-scan-actions {
+  margin: 0;
 }
 
 #npcc-settings .npcc-item-head {

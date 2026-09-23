@@ -9,7 +9,24 @@ import {
     sanitizeNpcUpdates,
     sanitizeSheetProfile,
     stripDecorations,
+    validateAiNpcCandidates,
 } from '../scout.js';
+
+test('AI 후보는 채팅 원문 이름과 인용문이 확인되고 기준 답변 수를 채워야 한다', () => {
+    const messages = [
+        { id: 'm1', text: '라온이 웃으며 문을 열었다. 서울에서 돌아왔다.' },
+        { id: 'm2', text: '라온은 손을 흔들며 인사했다. 서울은 멀다.' },
+    ];
+    const raw = { npcs: [
+        { name: '라온', evidence: ['라온이 웃으며 문을 열었다.'] },
+        { name: 'Raon', evidence: ['라온이 웃으며 문을 열었다.'] },
+        { name: '서울', evidence: ['서울에서 돌아왔다.'] },
+        { name: '손', evidence: ['손을 흔들며 인사했다.'] },
+        { name: '허구', evidence: ['허구가 말했다.'] },
+    ] };
+    assert.deepEqual(validateAiNpcCandidates(raw, messages).map((item) => item.name), ['라온']);
+    assert.equal(validateAiNpcCandidates(raw, messages, ['라온']).length, 0);
+});
 
 test('조사가 붙은 한국어 NPC 이름을 여러 답변에서 감지한다', () => {
     const messages = [

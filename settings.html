@@ -22,10 +22,12 @@
             <strong>캐스팅 후보</strong>
             <small>카드에 없는 이름이 반복 등장하면 여기에 올라와요</small>
           </div>
-          <button id="npcc-rescan" class="menu_button" type="button">
-            <i class="fa-solid fa-rotate" aria-hidden="true"></i> 다시 스캔
-          </button>
+          <div class="npcc-button-row npcc-scan-actions">
+            <button id="npcc-rescan" class="menu_button" type="button"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 다시 스캔</button>
+            <button id="npcc-ai-scan" class="menu_button" type="button">✨ AI 스캔</button>
+          </div>
         </div>
+        <small id="npcc-scan-status" class="npcc-field-note">내부 스캔 결과</small>
         <div id="npcc-queue-note" class="npcc-queue-note" hidden></div>
 
         <div id="npcc-draft" class="npcc-draft" hidden>
@@ -44,8 +46,10 @@
         </div>
 
         <div class="npcc-merge-bar">
+          <label class="npcc-select-all" for="npcc-select-all"><input id="npcc-select-all" type="checkbox"> 전체 선택</label>
+          <button id="npcc-ignore-selected" class="menu_button" type="button">선택 무시</button>
           <button id="npcc-merge-selected" class="menu_button" type="button">🔗 선택 합치기</button>
-          <small>같은 NPC가 성·이름·별명으로 따로 잡혔다면 체크한 뒤 합쳐 주세요. 합친 이름 전부가 로어북 키워드가 돼요.</small>
+          <small>선택 무시는 체크한 후보를 한 번에 목록에서 지워요. 같은 NPC의 성·이름·별명만 선택 합치기로 묶어 주세요.</small>
         </div>
         <div id="npcc-candidate-list" class="npcc-list"></div>
         <div id="npcc-empty" class="npcc-empty" hidden>
@@ -91,7 +95,7 @@
         </label>
 
         <label class="npcc-field" for="npcc-profile">
-          <span>프로필 생성 연결</span>
+          <span>AI 스캔·프로필 생성 연결</span>
           <select id="npcc-profile" class="text_pole">
             <option value="">현재 연결 사용</option>
           </select>
@@ -142,7 +146,7 @@
           <button id="npcc-clear-dismissed" class="menu_button" type="button">무시 목록 초기화</button>
         </div>
 
-        <small class="npcc-save-note">설정은 변경 즉시 저장돼요. 이름 감지는 브라우저 안에서만 처리되고, API는 「로어북 생성」·「갱신」을 누를 때만 사용해요.</small>
+        <small class="npcc-save-note">설정은 변경 즉시 저장돼요. 「다시 스캔」은 API를 사용하지 않고, 「AI 스캔」·「로어북 생성」·「갱신」은 선택한 연결을 사용해요.</small>
       </section>
     </div>
   </div>
