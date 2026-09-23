@@ -24,7 +24,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.5';
+const EXTENSION_VERSION = '1.6.6';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -59,6 +59,8 @@ let requestAbortController = null;
 let pendingDraft = null;
 let wandDialog = null;
 let settingsHome = null;
+let toastHome = null;
+let dialogToastContainer = null;
 const registeredEventHandlers = [];
 
 function getContext() {
@@ -1252,6 +1254,33 @@ async function ensureStyles() {
     style.textContent = css;
 }
 
+function bringToastsIntoWandDialog() {
+    if (!wandDialog || dialogToastContainer) return;
+    // showModal() puts the dialog in the browser's top layer. A toast in body
+    // cannot appear above it, regardless of z-index, so keep the normal
+    // Toastr container inside the dialog until it closes.
+    const id = globalThis.toastr?.options?.containerId || 'toast-container';
+    const container = document.getElementById(id) ?? document.createElement('div');
+    if (!container.id) {
+        container.id = id;
+        container.className = globalThis.toastr?.options?.positionClass || 'toast-top-right';
+    }
+    toastHome = document.createComment('NPC 캐스팅룸 토스트 자리');
+    if (container.isConnected) container.before(toastHome);
+    else document.body.append(toastHome);
+    wandDialog.append(container);
+    dialogToastContainer = container;
+}
+
+function restoreToasts() {
+    if (dialogToastContainer) {
+        if (toastHome?.isConnected) toastHome.replaceWith(dialogToastContainer);
+        else document.body.append(dialogToastContainer);
+    }
+    toastHome = null;
+    dialogToastContainer = null;
+}
+
 function openWandDialog() {
     const settings = document.getElementById('npcc-settings');
     if (!settings) return;
@@ -1267,6 +1296,7 @@ function openWandDialog() {
             if (event.target === wandDialog) wandDialog.close();
         });
         wandDialog.addEventListener('close', () => {
+            restoreToasts();
             if (settingsHome?.isConnected && settings.isConnected) settingsHome.replaceWith(settings);
             settingsHome = null;
         });
@@ -1278,6 +1308,7 @@ function openWandDialog() {
     wandDialog.append(settings);
     updateUi();
     wandDialog.showModal();
+    bringToastsIntoWandDialog();
 }
 
 function registerWandMenu() {
@@ -1373,6 +1404,7 @@ export function onDisable() {
     runtimeActive = false;
     if (typeof document !== 'undefined') {
         if (wandDialog?.open) wandDialog.close();
+        restoreToasts();
         const settings = document.getElementById('npcc-settings');
         if (settingsHome?.isConnected && settings?.isConnected) settingsHome.replaceWith(settings);
         settingsHome = null;
