@@ -394,6 +394,32 @@ test('삭제된 NPC 항목만 다시 생성하고 복구된 항목이나 다른 
     module.onDisable();
 });
 
+test('데뷔 목록 삭제는 추적 기록만 지우고 재스캔 후보와 로어북 항목을 보존한다', async () => {
+    const book = { entries: { 0: { uid: 0, content: '민수의 원본.' }, 1: { uid: 1, content: '다른 NPC의 원본.' } } };
+    let worldWrites = 0;
+    const tracked = { name: '민수', sourceNames: ['민수', 'Minsoo'], uid: 0, marker: 'one', world: '기존월드' };
+    const other = { name: '라온', sourceNames: ['라온'], uid: 1, marker: 'two', world: '기존월드' };
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { createdEntries: { 기존월드: [tracked, other] } } },
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존월드' } } }],
+        loadWorldInfo: async () => book,
+        saveWorldInfo: async () => { worldWrites += 1; },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?forget-created=${Date.now()}`);
+    assert.equal(module.forgetCreatedNpc({ ...tracked, marker: 'stale' }), false);
+    assert.equal(module.forgetCreatedNpc(tracked), true);
+    assert.equal(module.forgetCreatedNpc(tracked), false);
+    assert.deepEqual(context.extensionSettings.npcCastingRoom.createdEntries['기존월드'], [other]);
+    assert.equal(context.extensionSettings.npcCastingRoom.dismissed['card:peter.png'], undefined);
+    assert.equal(module.scanCandidates().some((candidate) => candidate.name === '민수'), true);
+    assert.equal(book.entries[0].content, '민수의 원본.');
+    assert.equal(book.entries[1].content, '다른 NPC의 원본.');
+    assert.equal(worldWrites, 0);
+    module.onDisable();
+});
+
 test('삭제된 UID가 다른 NPC에게 재사용되면 갱신을 막고 새 UID로 다시 생성한다', async () => {
     let book = { entries: { 0: { uid: 0, key: ['다른 NPC'], comment: '🎭 다른 NPC', content: '다른 사람의 원본.' } } };
     let calls = 0;

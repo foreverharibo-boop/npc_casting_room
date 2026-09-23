@@ -26,7 +26,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.11';
+const EXTENSION_VERSION = '1.6.13';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -1163,6 +1163,32 @@ function updateSelectionControls() {
     if (merge) merge.disabled = selected < 2;
 }
 
+export function forgetCreatedNpc(entry) {
+    const book = currentBookNameForUi();
+    const settings = getSettings();
+    const entries = settings.createdEntries[book];
+    if (!book || !Array.isArray(entries) || !entry) return false;
+    const index = entries.findIndex((saved) => saved?.uid === entry.uid
+        && saved.name === entry.name && saved.marker === entry.marker);
+    if (index < 0) return false;
+
+    const [removed] = entries.splice(index, 1);
+    if (!entries.length) delete settings.createdEntries[book];
+    createdStatusRequest += 1;
+    createdEntryStatus.delete(`${book}:${removed.uid}`);
+    const names = [removed.name, ...(Array.isArray(removed.sourceNames) ? removed.sourceNames : [])].filter(Boolean);
+    saveSettings();
+
+    if (pendingDraft?.target?.name === book &&
+        (pendingDraft.npcName === removed.name || pendingDraft.sourceNames?.some((name) => names.includes(name)))) {
+        pendingDraft = null;
+    }
+    if (queuedCandidate && names.includes(queuedCandidate.name)) queuedCandidate = null;
+    applyDetectedCandidates();
+    updateUi();
+    return true;
+}
+
 function renderCreated() {
     const list = document.getElementById('npcc-created-list');
     const empty = document.getElementById('npcc-created-empty');
@@ -1203,6 +1229,22 @@ function renderCreated() {
             }));
             actions.append(recreate);
         }
+        const forget = document.createElement('button');
+        forget.type = 'button';
+        forget.className = 'menu_button';
+        forget.textContent = '삭제';
+        forget.title = '캐스팅룸 추적 목록에서만 삭제합니다. 로어북 항목은 삭제하지 않습니다.';
+        forget.disabled = generating || aiScanning;
+        forget.addEventListener('click', () => {
+            const confirmed = globalThis.confirm?.(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 삭제할까요?\n로어북 항목은 삭제하지 않습니다. 다시 스캔하면 후보로 나타날 수 있어요.`);
+            if (!confirmed) return;
+            if (forgetCreatedNpc(entry)) {
+                toastr.success(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 삭제했어요. 로어북 항목은 그대로예요.`, '🎭캐스팅룸');
+            } else {
+                toastr.info('NPC 기록이 이미 바뀌었어요. 목록을 다시 확인해 주세요.', '🎭캐스팅룸');
+            }
+        });
+        actions.append(forget);
         row.append(label, actions);
         list.append(row);
     }
