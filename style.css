@@ -1,5 +1,21 @@
 #npcc-settings {
   margin: 0;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+#npcc-settings *,
+#npcc-settings *::before,
+#npcc-settings *::after {
+  box-sizing: border-box;
+}
+
+#npcc-settings .inline-drawer,
+#npcc-settings .inline-drawer-content {
+  width: 100%;
+  min-width: 0;
 }
 
 #npcc-settings .npcc-drawer-header,
@@ -35,19 +51,39 @@
 
 #npcc-settings .npcc-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 6px;
   margin: 10px 0;
+  width: 100%;
 }
 
 #npcc-settings .npcc-tab {
   width: 100%;
+  min-width: 0;
   margin: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  word-break: keep-all;
+  border: 2px solid transparent;
 }
 
 #npcc-settings .npcc-tab.is-active {
-  filter: brightness(1.15);
-  box-shadow: inset 0 -2px 0 var(--SmartThemeQuoteColor, currentColor);
+  border-color: var(--SmartThemeQuoteColor, currentColor);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 14%, transparent);
+  box-shadow: none;
+}
+
+#npcc-settings .npcc-tab:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+#npcc-settings .npcc-tab:focus-visible {
+  outline: 2px solid var(--SmartThemeQuoteColor, currentColor);
+  outline-offset: 2px;
 }
 
 #npcc-settings .npcc-count {
@@ -67,8 +103,17 @@
   padding: 2px 0 8px;
 }
 
+#npcc-settings #npcc-custom-format-prompt {
+  width: 100%;
+  min-height: 130px;
+  resize: vertical;
+  margin-top: 5px;
+  line-height: 1.4;
+}
+
 #npcc-settings .npcc-section-head {
   margin: 10px 0 6px;
+  flex-wrap: wrap;
 }
 
 #npcc-settings .npcc-section-head > div {
@@ -110,6 +155,7 @@
   align-items: center;
   gap: 8px;
   margin: 6px 0;
+  flex-wrap: wrap;
 }
 
 #npcc-settings .npcc-merge-bar .menu_button {
@@ -139,11 +185,13 @@
 
 #npcc-settings .npcc-list {
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  min-width: 0;
 }
 
 #npcc-settings .npcc-item {
   padding: 10px 0;
   border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  min-width: 0;
 }
 
 #npcc-settings .npcc-item-name {
@@ -164,6 +212,11 @@
   margin-top: 5px;
   opacity: 0.72;
   overflow-wrap: anywhere;
+}
+
+#npcc-settings .menu_button {
+  max-width: 100%;
+  word-break: keep-all;
 }
 
 /* All action buttons flow horizontally and never stretch full-width. */
@@ -253,6 +306,44 @@
 
 #npcc-settings [hidden] {
   display: none !important;
+}
+
+#npcc-wand-dialog {
+  width: min(94vw, 760px);
+  max-width: 94vw;
+  max-height: min(90dvh, 850px);
+  padding: 14px;
+  overflow: auto;
+  color: var(--SmartThemeBodyColor, inherit);
+  background: var(--SmartThemeBlurTintColor, #202028);
+  border: 1px solid var(--SmartThemeQuoteColor, currentColor);
+  border-radius: 10px;
+  z-index: 10000;
+}
+
+#npcc-wand-dialog::backdrop {
+  background: rgb(0 0 0 / 65%);
+}
+
+#npcc-wand-dialog .npcc-dialog-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+#npcc-wand-dialog .npcc-dialog-head button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+#npcc-wand-dialog #npcc-settings .inline-drawer-toggle {
+  display: none;
+}
+
+#npcc-wand-dialog #npcc-settings .inline-drawer-content {
+  display: block !important;
 }
 
 @media (max-width: 520px) {

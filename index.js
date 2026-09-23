@@ -23,7 +23,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.5.4';
+const EXTENSION_VERSION = '1.6.2';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -37,6 +37,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     profileId: '',
     maxTokens: 1200,
     entryFormat: 'sheet',
+    customFormatPrompt: '',
     inferMissing: true,
     outputLanguage: 'english',
     dismissed: {},
@@ -55,6 +56,8 @@ let mainGenerationBusy = false;
 let queuedCandidate = null;
 let requestAbortController = null;
 let pendingDraft = null;
+let wandDialog = null;
+let settingsHome = null;
 const registeredEventHandlers = [];
 
 function getContext() {
@@ -82,7 +85,12 @@ function getSettings() {
     settings.createdEntries = settings.createdEntries && typeof settings.createdEntries === 'object' ? settings.createdEntries : {};
     settings.mergedGroups = settings.mergedGroups && typeof settings.mergedGroups === 'object' ? settings.mergedGroups : {};
     settings.lorebookTarget = settings.lorebookTarget === 'chat' ? 'chat' : 'character';
-    settings.entryFormat = settings.entryFormat === 'basic' ? 'basic' : 'sheet';
+    // Old "basic" was a verbose legacy layout. Migrate it to the new,
+    // deliberately shortest basic NPC sheet.
+    settings.entryFormat = settings.entryFormat === 'basic' ? 'compact' : settings.entryFormat;
+    settings.entryFormat = ['sheet', 'balanced', 'compact', 'custom'].includes(settings.entryFormat)
+        ? settings.entryFormat : 'sheet';
+    settings.customFormatPrompt = typeof settings.customFormatPrompt === 'string' ? settings.customFormatPrompt : '';
     settings.inferMissing = settings.inferMissing !== false;
     settings.outputLanguage = settings.outputLanguage === 'korean' ? 'korean' : 'english';
     settings.windowSize = Math.max(5, Math.round(Number(settings.windowSize) || DEFAULT_SETTINGS.windowSize));
@@ -322,6 +330,13 @@ function referenceSheetText() {
     return description.slice(0, 1000000);
 }
 
+function stripMainCharacterWrapper(sheet) {
+    return String(sheet ?? '')
+        .replace(/^\s*<\s*\{\{\s*char\s*\}\}\s*>\s*/i, '')
+        .replace(/\s*<\s*\/\s*\{\{\s*char\s*\}\}\s*>\s*$/i, '')
+        .trim();
+}
+
 function npcSheetPromptMessages(candidate, sceneText, referenceSheet, existingContent = '') {
     const alsoCalled = candidate.members?.length
         ? ` This NPC is also referred to as: ${candidate.members.map((member) => JSON.stringify(member)).join(', ')}. Treat all of these as the same person.`
@@ -332,7 +347,7 @@ function npcSheetPromptMessages(candidate, sceneText, referenceSheet, existingCo
         ? `- Fill EVERY section of the sheet; leave nothing empty. When the excerpts give no direct information for a section, infer the most plausible value from the NPC's shown behavior, dialogue, and context, and append the exact marker "(추정)" to each inferred value (always this Korean marker, regardless of the writing language). Inferences must never contradict anything shown in the excerpts.`
         : `- Omit sections the excerpts give no information for.\n- Describe only what the excerpts actually show or strongly imply; never invent details.`;
     const languageRule = `- Write every field value in ${languageName}, regardless of the language of the excerpts or of the reference sheet. Keep the reference sheet's section labels and markup exactly as they are.`;
-    const system = `You compile a factual profile of one NPC from roleplay chat excerpts, formatted to match a reference character sheet. Return JSON only, with no markdown fences.\n\nSchema:\n{"name":"","aliases":[""],"sheet":"","example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- "sheet" must imitate the reference character sheet's format exactly: the same section names, the same order, the same markup or tag style, and the same language for section labels. Fill the sections with the TARGET NPC's information only.\n- The reference sheet describes a DIFFERENT character. Never copy its facts, personality, or story details — copy only its structure.\n${languageRule}\n${coverageRule}\n- example_lines: lines spoken by the target NPC, copied verbatim from the excerpts — include as many as the excerpts genuinely support. If unsure who spoke a line, omit it.\n- The sheet may be as long and detailed as the reference format requires.\n- The ENTIRE reply must be exactly one JSON object: the first character '{' and the last character '}'. No markdown, no commentary.`;
+    const system = `You compile a factual profile of one NPC from roleplay chat excerpts, formatted to match a reference character sheet. Return JSON only, with no markdown fences.\n\nSchema:\n{"name":"","aliases":[""],"sheet":"","example_lines":[""]}\n\nRules:\n- Target NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore every other character.\n- "sheet" must imitate the reference character sheet's inner format: the same section names, order, markup, and language for section labels. Fill the sections with the TARGET NPC's information only.\n- If the reference is wrapped in <{{char}}> and </{{char}}>, omit those outer tags entirely. They identify the MAIN character, not this NPC. Start directly with the first section; do not invent an equivalent character wrapper.\n- The reference sheet describes a DIFFERENT character. Never copy its facts, personality, or story details — copy only its structure.\n${languageRule}\n${coverageRule}\n- example_lines: lines spoken by the target NPC, copied verbatim from the excerpts — include as many as the excerpts genuinely support. If unsure who spoke a line, omit it.\n- The sheet may be as long and detailed as the reference format requires.\n- The ENTIRE reply must be exactly one JSON object: the first character '{' and the last character '}'. No markdown, no commentary.`;
     const existing = existingContent
         ? `\n\nAn earlier profile of this NPC exists. Merge it with the new excerpts and return the updated full sheet:\n${existingContent.slice(0, 1000000)}`
         : '';
@@ -340,6 +355,36 @@ function npcSheetPromptMessages(candidate, sceneText, referenceSheet, existingCo
     return [
         { role: 'system', content: system },
         { role: 'user', content: user },
+    ];
+}
+
+function npcFormattedPromptMessages(candidate, sceneText, format, customPrompt = '', existingContent = '') {
+    const settings = getSettings();
+    const languageName = settings.outputLanguage === 'korean' ? 'Korean' : 'English';
+    const labels = settings.outputLanguage === 'korean'
+        ? { appearance: '외형', behavior: '성격·행동', speech: '말투', relationships: '관계', continuity: '기억할 사실', identity: '신상·역할', presentation: '외형·인상', personality: '성격·동기', behaviorDetail: '행동 방식', background: '배경', arc: '현재 상황·목표', details: '연속성 정보' }
+        : { appearance: 'Appearance', behavior: 'Personality & behavior', speech: 'Speech', relationships: 'Relationships', continuity: 'Continuity', identity: 'Identity & role', presentation: 'Appearance & presentation', personality: 'Personality & motives', behaviorDetail: 'Behavior', background: 'Background', arc: 'Current situation & goals', details: 'Continuity details' };
+    const mediumHeadings = settings.outputLanguage === 'korean'
+        ? { identity: '신상·외형', background: '배경', relationships: '관계', personality: '성격·심리', behavior: '습관·행동', speech: '말투', goals: '목표·현재 상황', assets: '능력·자원' }
+        : { identity: 'IDENTITY & APPEARANCE', background: 'BACKSTORY', relationships: 'CONNECTIONS', personality: 'PERSONALITY & PSYCHOLOGY', behavior: 'HABITS & BEHAVIOR', speech: 'SPEECH', goals: 'GOALS & CURRENT SITUATION', assets: 'CAPABILITIES & ASSETS' };
+    const alsoCalled = candidate.members?.length
+        ? ` Also known as: ${candidate.members.map((member) => JSON.stringify(member)).join(', ')}. These names refer to one person.`
+        : '';
+    const formatRule = format === 'compact'
+        ? `Write the shortest basic NPC lorebook entry, ideally about 100–180 English-equivalent tokens. Keep only details needed to recognize and portray this NPC when they appear again. Use these lines in order, omitting lines without supported information:\n[NPC: name]\n${labels.appearance}: their role and one or two recognizable features.\n${labels.behavior}: core disposition and typical actions.\n${labels.speech}: formality, tone, and one distinctive verbal habit.\n${labels.relationships}: current ties to important characters.\n${labels.continuity}: up to three plot-relevant facts, goals, promises, or unresolved events.\nDo not invent backstory, inner motives, or intimate details. On updates, rewrite this short entry rather than appending text. Do not repeat aliases inside the sheet; they are separate lorebook keys.`
+        : format === 'balanced'
+            ? `Write a medium-length NPC sheet, ideally about 300–500 English-equivalent tokens. Draw from a SOLO BOT character sheet, but keep it focused on this supporting character and clearly richer than the basic five-line entry. Use these sections in order; omit unsupported sections:\n[NPC: name]\n> OVERVIEW: role, defining quality, and current story dynamic in two or three sentences.\n> ${mediumHeadings.identity}: established identity, occupation or role, affiliations, and recognizable appearance. Include age or origin only if known.\n> ${mediumHeadings.background}: past events that still affect the NPC's behavior or current plot.\n> ${mediumHeadings.relationships}: describe important connections separately, including changes in trust, conflict, or affection.\n> ${mediumHeadings.personality}: three or four lasting traits and supported motives, beliefs, fears, or vulnerabilities. Do not invent hidden trauma.\n> ${mediumHeadings.behavior}: recurring habits, tells, decisions, and reactions under pressure.\n> ${mediumHeadings.speech}: formality, tone, and verbal habits, with up to two verified lines actually spoken by the NPC when useful.\n> ${mediumHeadings.goals}: current aims, recent developments, unresolved conflicts, and promises.\n> ${mediumHeadings.assets}: relevant skills, resources, possessions, injuries, or locations needed for continuity.\nOn updates, merge old and new facts into a coherent sheet rather than adding a running diary. Do not add sexual preferences or intimate anatomy unless explicitly established and relevant. Do not repeat aliases inside the sheet; they are separate lorebook keys.`
+            : `Follow this user-defined NPC sheet format. The user's instructions determine section names, order, markup, and amount of detail. Never copy character facts from examples in these instructions:\n${customPrompt}`;
+    const inferenceRule = settings.inferMissing
+        ? 'Infer a useful missing detail only when strongly supported by the excerpts. Mark each inferred value with the exact suffix "(추정)". Never contradict observed facts. Omit fields without a reasonable basis.'
+        : 'Include only information shown or strongly implied by the excerpts. Omit unknown fields instead of inventing them.';
+    const system = `Compile a profile for the target NPC from roleplay chat excerpts. Return exactly one JSON object, with no markdown fences or commentary.\nSchema: {"name":"","aliases":[""],"sheet":"","example_lines":[""]}\nTarget NPC: ${JSON.stringify(candidate.name)}.${alsoCalled} Ignore other characters.\nWrite field values in ${languageName}; keep the format's specified labels and markup. Preserve established names and facts.\n${inferenceRule}\n${formatRule}\nOn updates, rewrite the full sheet at the selected level of detail, combining supported earlier facts with new developments. Do not simply append the new scene.\nOnly include example_lines spoken by the target NPC and copied verbatim from the excerpts; use an empty array otherwise.\nThe JSON "sheet" must contain the formatted text. The first reply character must be '{' and the last must be '}'.`;
+    const previous = existingContent
+        ? `\n\nEarlier profile (merge with the new excerpts; preserve supported details):\n${existingContent.slice(0, 1000000)}`
+        : '';
+    return [
+        { role: 'system', content: system },
+        { role: 'user', content: `Chat excerpts:\n\n${sceneText}${previous}` },
     ];
 }
 
@@ -532,6 +577,11 @@ export async function prepareNpcDraft(candidate) {
     const worldApi = await getWorldApi();
     if (!worldApi) return { ok: false, reason: '이 실리태번 버전에서는 로어북 API를 찾을 수 없어요.' };
 
+    const settings = getSettings();
+    if (settings.entryFormat === 'custom' && !settings.customFormatPrompt.trim()) {
+        return { ok: false, reason: '설정에서 직접 설정 양식의 프롬프트를 입력해 주세요.' };
+    }
+
     const sceneText = buildScenesFor(candidate);
     if (!sceneText) return { ok: false, reason: '이 NPC가 등장한 장면을 찾지 못했어요. 다시 스캔해 주세요.' };
 
@@ -550,19 +600,21 @@ export async function prepareNpcDraft(candidate) {
             } catch { /* 기존 내용이 없으면 새로 작성 */ }
         }
 
-        const settings = getSettings();
-        const referenceSheet = settings.entryFormat !== 'basic' ? referenceSheetText() : '';
-        const useSheetFormat = Boolean(referenceSheet);
+        const referenceSheet = settings.entryFormat === 'sheet' ? referenceSheetText() : '';
+        const useReferenceSheet = Boolean(referenceSheet);
+        const useFormattedSheet = useReferenceSheet || ['compact', 'balanced', 'custom'].includes(settings.entryFormat);
         requestAbortController?.abort();
         requestAbortController = new AbortController();
         const response = await requestNpcProfile(
-            useSheetFormat
+            useReferenceSheet
                 ? npcSheetPromptMessages(candidate, sceneText, referenceSheet, existingContent)
-                : npcPromptMessages(candidate, sceneText, existingContent),
+                : useFormattedSheet
+                    ? npcFormattedPromptMessages(candidate, sceneText, settings.entryFormat, settings.customFormatPrompt, existingContent)
+                    : npcPromptMessages(candidate, sceneText, existingContent),
             requestAbortController.signal,
         );
         const parsed = parseProfileResponse(response);
-        const npc = useSheetFormat
+        const npc = useFormattedSheet
             ? sanitizeSheetProfile(parsed, sceneText, candidate.name)
             : sanitizeNpcProfile(parsed, sceneText, candidate.name);
         if (!npc) throw new Error('AI가 만든 프로필이 검증을 통과하지 못했어요.');
@@ -574,9 +626,10 @@ export async function prepareNpcDraft(candidate) {
         npc.aliases = npc.aliases.slice(0, 24);
 
         let content;
-        if (useSheetFormat) {
-            content = npc.sheet;
-            const missingLines = (npc.exampleLines ?? []).filter((line) => !content.includes(line));
+        if (useFormattedSheet) {
+            content = useReferenceSheet ? stripMainCharacterWrapper(npc.sheet) : npc.sheet;
+            const exampleLimit = settings.entryFormat === 'compact' ? 1 : settings.entryFormat === 'balanced' ? 2 : settings.entryFormat === 'custom' ? 0 : Infinity;
+            const missingLines = (npc.exampleLines ?? []).filter((line) => !content.includes(line)).slice(0, exampleLimit);
             if (missingLines.length) {
                 content += `\n\n예시 대사:\n${missingLines.map((line) => `- "${line}"`).join('\n')}`;
             }
@@ -921,6 +974,10 @@ function updateUi() {
     if (maxTokensInput) maxTokensInput.value = String(settings.maxTokens);
     const entryFormatSelect = document.getElementById('npcc-entry-format');
     if (entryFormatSelect) entryFormatSelect.value = settings.entryFormat;
+    const customSection = document.getElementById('npcc-custom-format-section');
+    if (customSection) customSection.hidden = settings.entryFormat !== 'custom';
+    const customPromptInput = document.getElementById('npcc-custom-format-prompt');
+    if (customPromptInput && document.activeElement !== customPromptInput) customPromptInput.value = settings.customFormatPrompt;
     const inferMissingCheck = document.getElementById('npcc-infer-missing');
     if (inferMissingCheck) inferMissingCheck.checked = Boolean(settings.inferMissing);
     const languageSelect = document.getElementById('npcc-language');
@@ -984,6 +1041,10 @@ function bindUi() {
     bindSetting('npcc-target', 'lorebookTarget', String);
     bindSetting('npcc-profile', 'profileId', String);
     bindSetting('npcc-entry-format', 'entryFormat', String);
+    document.getElementById('npcc-custom-format-prompt')?.addEventListener('input', (event) => {
+        getSettings().customFormatPrompt = event.currentTarget.value;
+        saveSettings();
+    });
     bindSetting('npcc-infer-missing', 'inferMissing', Boolean);
     bindSetting('npcc-language', 'outputLanguage', String);
     bindSetting('npcc-max-tokens', 'maxTokens', (value) => {
@@ -1079,6 +1140,69 @@ async function initializeUi() {
     updateUi();
 }
 
+async function ensureStyles() {
+    const url = new URL('./style.css', import.meta.url);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`스타일 파일을 불러오지 못했습니다 (${response.status}).`);
+    const css = await response.text();
+    if (!css.includes('#npcc-settings')) throw new Error('스타일 파일 내용이 올바르지 않습니다.');
+    let style = document.getElementById('npcc-runtime-style');
+    if (!style) {
+        style = document.createElement('style');
+        style.id = 'npcc-runtime-style';
+        document.head.append(style);
+    }
+    style.textContent = css;
+}
+
+function openWandDialog() {
+    const settings = document.getElementById('npcc-settings');
+    if (!settings) return;
+    if (!wandDialog) {
+        wandDialog = document.createElement('dialog');
+        wandDialog.id = 'npcc-wand-dialog';
+        const header = document.createElement('div');
+        header.className = 'npcc-dialog-head';
+        header.innerHTML = '<strong>🎭 NPC 캐스팅룸</strong><button class="menu_button" type="button" aria-label="닫기">✕</button>';
+        header.querySelector('button').addEventListener('click', () => wandDialog.close());
+        wandDialog.append(header);
+        wandDialog.addEventListener('click', (event) => {
+            if (event.target === wandDialog) wandDialog.close();
+        });
+        wandDialog.addEventListener('close', () => {
+            if (settingsHome?.isConnected && settings.isConnected) settingsHome.replaceWith(settings);
+            settingsHome = null;
+        });
+        document.body.append(wandDialog);
+    }
+    if (wandDialog.open) return;
+    settingsHome = document.createComment('NPC 캐스팅룸 설정 자리');
+    settings.replaceWith(settingsHome);
+    wandDialog.append(settings);
+    updateUi();
+    wandDialog.showModal();
+}
+
+function registerWandMenu() {
+    if (typeof document === 'undefined') return;
+    const menu = document.getElementById('extensionsMenu');
+    if (!menu || document.getElementById('npcc-wand-entry')) return;
+    const item = document.createElement('div');
+    item.id = 'npcc-wand-entry';
+    item.className = 'list-group-item flex-container flexGap5';
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
+    item.innerHTML = '<div class="fa-solid fa-masks-theater extensionsMenuExtensionButton" aria-hidden="true"></div><span>NPC 캐스팅룸</span>';
+    item.addEventListener('click', openWandDialog);
+    item.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openWandDialog();
+        }
+    });
+    menu.append(item);
+}
+
 function registerEvents() {
     if (eventsRegistered) return;
     const context = getContext();
@@ -1135,18 +1259,30 @@ async function initialize() {
     runtimeActive = true;
     getSettings();
     registerEvents();
+    await ensureStyles();
     await initializeUi();
+    registerWandMenu();
     console.log(`${LOG_PREFIX} v${EXTENSION_VERSION} 로드 완료`);
 }
 
 export function onEnable() {
     runtimeActive = true;
     registerEvents();
+    registerWandMenu();
     scheduleScan(100);
 }
 
 export function onDisable() {
     runtimeActive = false;
+    if (typeof document !== 'undefined') {
+        if (wandDialog?.open) wandDialog.close();
+        const settings = document.getElementById('npcc-settings');
+        if (settingsHome?.isConnected && settings?.isConnected) settingsHome.replaceWith(settings);
+        settingsHome = null;
+        wandDialog?.remove();
+        wandDialog = null;
+        document.getElementById('npcc-wand-entry')?.remove();
+    }
     clearTimeout(scanTimer);
     queuedCandidate = null;
     pendingDraft = null;

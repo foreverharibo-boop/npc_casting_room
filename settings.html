@@ -101,10 +101,20 @@
           <span>항목 양식</span>
           <select id="npcc-entry-format" class="text_pole">
             <option value="sheet">현재 캐릭터 시트 양식 따라하기</option>
-            <option value="basic">캐스팅룸 기본 양식</option>
+            <option value="balanced">중간 NPC 시트</option>
+            <option value="compact">기본 NPC 시트 (가장 짧게)</option>
+            <option value="custom">직접 설정한 양식</option>
           </select>
         </label>
-        <small class="npcc-field-note">시트 양식을 따라하면 현재 카드 설명의 구조(항목 이름·순서·마크업)를 그대로 흉내 내서 NPC 항목을 작성해요. 카드 설명이 비어 있거나 그룹챗이면 기본 양식으로 저장돼요.</small>
+        <small class="npcc-field-note">기본형이 가장 짧은 5줄 요약이에요. 중간형은 캐릭터 시트에서 관계·성격·말투·배경 등을 추려 쓰고, 캐릭터 시트 따라하기는 현재 카드의 항목 구조를 그대로 따릅니다.</small>
+
+        <div id="npcc-custom-format-section" class="npcc-custom-format" hidden>
+          <label class="npcc-field" for="npcc-custom-format-prompt">
+            <span>NPC 시트 양식 프롬프트</span>
+            <textarea id="npcc-custom-format-prompt" class="text_pole" rows="9" placeholder="예: [NPC: 이름] 다음에 외형, 성격, 말투, 관계, 중요한 사건을 이 순서대로 작성해. 각 항목은 1~2문장으로 적고 정보가 없으면 생략해."></textarea>
+          </label>
+          <small class="npcc-field-note">항목 이름·순서·길이·표기법을 자유롭게 적어 주세요. 입력하는 동안 자동 저장돼요. NPC 이름과 별명은 로어북 키워드로 별도 저장되며, 출력 언어와 추론 설정은 아래 옵션을 따라요.</small>
+        </div>
 
         <label class="npcc-field" for="npcc-language">
           <span>출력 언어</span>

@@ -380,6 +380,119 @@ test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한
     module.onDisable();
 });
 
+test('캐릭터 시트의 <{{char}}> 바깥 태그는 NPC 초안과 로어북에서 제거한다', async () => {
+    const prompts = [];
+    const saved = [];
+    const context = makeContext({
+        characters: [{
+            name: 'Peter', avatar: 'peter.png',
+            description: '<{{char}}>\n> OVERVIEW\n> IDENTITY\n- Name: Peter\n</{{char}}>',
+            data: {},
+        }],
+        generateRaw: async ({ prompt }) => {
+            prompts.push(prompt);
+            return JSON.stringify({
+                name: '민수', aliases: [],
+                sheet: '<{{char}}>\n> OVERVIEW: 바를 운영하는 조용한 남자.\n> IDENTITY\n- Name: 민수\n</{{char}}>',
+                example_lines: [],
+            });
+        },
+        loadWorldInfo: async () => null,
+        saveWorldInfo: async (name, data) => saved.push(data),
+        writeExtensionField: async () => {},
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?char-wrapper=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const prepared = await module.prepareNpcDraft(candidate);
+    assert.equal(prepared.ok, true);
+    assert.match(prompts[0][0].content, /omit those outer tags entirely/);
+    assert.match(prompts[0][1].content, /<\{\{char\}\}>/);
+    assert.match(prepared.draft.content, /^> OVERVIEW:/);
+    assert.match(prepared.draft.content, /> IDENTITY\n- Name: 민수$/);
+    assert.doesNotMatch(prepared.draft.content, /<\/?\{\{char\}\}>/);
+    await module.saveNpcDraft(prepared.draft);
+    assert.equal(saved[0].entries[0].content, prepared.draft.content);
+    module.onDisable();
+});
+
+test('최소형과 중간형은 서로 다른 길이와 항목 지침을 적용하고 기존 로어북에 저장한다', async () => {
+    const prompts = [];
+    const saved = [];
+    let book = { entries: { 0: { uid: 0, key: ['기존키'], content: '기존 항목' } } };
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { entryFormat: 'compact', inferMissing: false } },
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존월드' } } }],
+        generateRaw: async ({ prompt }) => {
+            prompts.push(prompt);
+            return JSON.stringify({
+                name: '민수', aliases: ['미스터 민'],
+                sheet: '[NPC: 민수]\nSpeech: 짧은 반말.\nContinuity: 바를 운영한다.',
+                example_lines: ['반갑네, 오랜만이군.'],
+            });
+        },
+        loadWorldInfo: async () => book,
+        saveWorldInfo: async (name, data) => { saved.push({ name, data }); book = structuredClone(data); },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?format-modes=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const first = await module.createNpcLorebookEntry(candidate);
+    assert.equal(first.world, '기존월드');
+    assert.match(prompts[0][0].content, /100–180/);
+    assert.match(prompts[0][0].content, /Omit unknown fields/);
+    assert.equal(saved[0].data.entries[0].content, '기존 항목');
+    assert.match(saved[0].data.entries[1].content, /Speech: 짧은 반말/);
+    assert.equal((saved[0].data.entries[1].content.match(/반갑네/g) ?? []).length, 1);
+
+    context.extensionSettings.npcCastingRoom.entryFormat = 'balanced';
+    await module.createNpcLorebookEntry(candidate);
+    assert.match(prompts[1][0].content, /300–500/);
+    assert.match(prompts[1][0].content, /PERSONALITY & PSYCHOLOGY/);
+    assert.match(prompts[1][0].content, /GOALS & CURRENT SITUATION/);
+    assert.match(prompts[1][0].content, /CAPABILITIES & ASSETS/);
+    assert.match(prompts[1][1].content, /Earlier profile/);
+    assert.equal(saved[1].data.entries[0].content, '기존 항목');
+    assert.equal(Object.keys(saved[1].data.entries).length, 2);
+    module.onDisable();
+});
+
+test('직접 설정 양식은 입력을 요구하며 생성과 갱신에서 같은 사용자 지침을 사용한다', async () => {
+    const prompts = [];
+    let book = { entries: {} };
+    const customFormatPrompt = '<npc> 태그 안에 말투와 중요한 사건만 두 줄로 적어.';
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { entryFormat: 'custom', customFormatPrompt: '' } },
+        generateRaw: async ({ prompt }) => {
+            prompts.push(prompt);
+            return JSON.stringify({ name: '민수', aliases: [], sheet: '<npc>\n말투: 짧은 반말\n사건: 바를 운영함\n</npc>', example_lines: [] });
+        },
+        loadWorldInfo: async () => book,
+        saveWorldInfo: async (name, data) => { book = structuredClone(data); },
+        writeExtensionField: async () => {},
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?custom-mode=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const missing = await module.prepareNpcDraft(candidate);
+    assert.equal(missing.ok, false);
+    assert.match(missing.reason, /프롬프트/);
+    assert.equal(prompts.length, 0);
+
+    context.extensionSettings.npcCastingRoom.customFormatPrompt = customFormatPrompt;
+    const result = await module.createNpcLorebookEntry(candidate);
+    assert.equal(result.ok, true);
+    assert.match(book.entries[0].content, /<npc>/);
+    assert.match(prompts[0][0].content, /말투와 중요한 사건만 두 줄/);
+    await module.createNpcLorebookEntry(candidate);
+    assert.match(prompts[1][0].content, /말투와 중요한 사건만 두 줄/);
+    assert.match(prompts[1][1].content, /Earlier profile/);
+    module.onDisable();
+});
+
 test('추론 모델의 think 블록을 걷어내고 JSON을 찾으며 빈 응답에는 토큰 안내를 한다', async () => {
     const context = makeContext();
     globalThis.SillyTavern = { getContext: () => context };
