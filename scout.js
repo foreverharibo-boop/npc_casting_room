@@ -26,6 +26,20 @@ const EN_COMMON_WORDS = new Set([
     'anyway', 'somehow', 'already', 'never', 'always', 'sometimes', 'often', 'could', 'would', 'should',
     'did', 'does', 'doing', 'have', 'has', 'had', 'having', 'been', 'being', 'let', 'everyone', 'everybody',
     'somebody', 'anybody', 'nobody', 'one', 'thing',
+    'street', 'avenue', 'boulevard', 'road', 'highway', 'district', 'county', 'province',
+    'city', 'town', 'village', 'airport', 'station', 'ocean', 'sea', 'river', 'lake',
+]);
+
+// Frequently mentioned real locations and geographic adjectives are not NPCs.
+const EN_PLACE_NAMES = new Set([
+    'california', 'seoul', 'incheon', 'pacific', 'atlantic', 'tokyo', 'osaka',
+    'korea', 'japan', 'china', 'america', 'europe', 'asia', 'africa',
+    'new york', 'los angeles', 'london', 'paris', 'busan', 'daegu',
+]);
+const EN_PLACE_DESIGNATORS = new Set([
+    'street', 'st', 'avenue', 'ave', 'road', 'rd', 'boulevard', 'blvd', 'lane', 'ln',
+    'district', 'city', 'county', 'province', 'state', 'airport', 'station',
+    'ocean', 'sea', 'river', 'lake', 'mountain', 'island', 'high', 'highway',
 ]);
 
 const WORD_PATTERN = /[A-Za-z][A-Za-z'’\-]*|[가-힣]+/g;
@@ -40,6 +54,10 @@ const KO_COMMON_STEMS = new Set([
     '함께', '문득', '잠시', '고개', '숨결', '입술', '어깨', '대답', '질문', '이야기', '모습', '느낌',
     '소리', '기분', '표정', '분위기', '상대', '상황', '문제', '이유', '대화', '자리', '주변', '근처',
     '하나', '무언가', '누군가', '어딘가', '스스로', '온몸', '심장', '숨소리', '한숨', '눈빛', '눈동자',
+]);
+const KO_PLACE_STEMS = new Set([
+    '서울', '인천', '부산', '대구', '대전', '광주', '울산', '세종', '제주', '경기',
+    '강원', '충북', '충남', '전북', '전남', '경북', '경남', '일본', '중국', '미국',
 ]);
 
 // Longest-first so 께서는 wins over 는.
@@ -210,7 +228,11 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
                     const stem = normalizedEnglish.replace(/'(?:s)?$/i, '');
                     if (stem.length < 3) continue;
                     const lower = stem.toLocaleLowerCase();
-                    if (EN_COMMON_WORDS.has(lower) || known.has(lower)) continue;
+                    if (EN_COMMON_WORDS.has(lower) || EN_PLACE_NAMES.has(lower) || known.has(lower)) continue;
+                    const nextToken = tokens[tokenIndex + 1];
+                    const gap = nextToken ? sentence.slice(tokenMatch.index + token.length, nextToken.index) : '';
+                    if (nextToken && /^\s+$/.test(gap)
+                        && EN_PLACE_DESIGNATORS.has(nextToken[0].toLocaleLowerCase().replace(/\.$/, ''))) continue;
                     record(lower, stem, message.id, sentence, {
                         kind: 'en',
                         midSentence: tokenIndex > 0,
@@ -224,7 +246,7 @@ export function detectNpcCandidates(messages, knownNames = [], options = {}) {
                     const candidates = stem ? [{ stem, suffixForm: true }] : [{ stem: token, suffixForm: false }];
                     for (const { stem: value, suffixForm } of candidates) {
                         if (value.length < 2 || value.length > 6) continue;
-                        if (KO_COMMON_STEMS.has(value) || known.has(value.toLocaleLowerCase())) continue;
+                        if (KO_COMMON_STEMS.has(value) || KO_PLACE_STEMS.has(value) || known.has(value.toLocaleLowerCase())) continue;
                         record(`ko:${value}`, value, message.id, sentence, {
                             kind: 'ko',
                             suffixForm,

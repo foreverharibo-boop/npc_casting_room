@@ -23,7 +23,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.2';
+const EXTENSION_VERSION = '1.6.3';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -263,7 +263,11 @@ export function resolveTargetBook() {
         // instead of competing with a second book.
         return { name: primary.trim(), binding: 'existing', createIfMissing: false };
     }
-    return { name: sanitizeBookName(`캐스팅룸-${character.name ?? 'character'}`), binding: 'new-character', createIfMissing: true };
+    return {
+        name: sanitizeBookName(`캐스팅룸-${character.name ?? 'character'}`),
+        binding: 'new-character', createIfMissing: true,
+        characterId: Number(context.characterId), avatar: character.avatar,
+    };
 }
 
 async function getWorldApi() {
@@ -276,6 +280,19 @@ async function getWorldApi() {
         console.debug(`${LOG_PREFIX} world-info.js 직접 임포트 실패`, error);
     }
     return null;
+}
+
+async function refreshWorldList(worldApi) {
+    let update = worldApi.updateWorldInfoList;
+    if (typeof update !== 'function') {
+        try {
+            const module = await import('../../../world-info.js');
+            update = module.updateWorldInfoList;
+        } catch (error) {
+            console.debug(`${LOG_PREFIX} 로어북 목록 갱신 API를 찾지 못했어요`, error);
+        }
+    }
+    if (typeof update === 'function') await update.call(worldApi);
 }
 
 async function getWriteExtensionField() {
@@ -668,7 +685,7 @@ export async function saveNpcDraft(draft) {
     if (!data || typeof data !== 'object' || !data.entries || typeof data.entries !== 'object') {
         // Never turn a temporary read failure into an overwrite of an existing
         // lorebook. Empty data is valid only for a book we are creating now.
-        if (!target.createIfMissing) {
+        if (!target.createIfMissing || loadError || tracked.length) {
             const detail = loadError?.message ? ` (${loadError.message})` : '';
             throw new Error(`기존 로어북 "${target.name}"을 읽지 못해 안전을 위해 저장을 중단했어요.${detail}`);
         }
@@ -686,23 +703,38 @@ export async function saveNpcDraft(draft) {
         content: draft.content,
     };
     await worldApi.saveWorldInfo(target.name, data, true);
-    if (typeof worldApi.updateWorldInfoList === 'function') {
-        try { await worldApi.updateWorldInfoList(); } catch { /* 목록 갱신은 실패해도 치명적이지 않음 */ }
+    try { await refreshWorldList(worldApi); } catch (error) {
+        console.warn(`${LOG_PREFIX} 로어북 목록 갱신 실패`, error);
     }
 
     let bindingNote = '';
     if (target.binding === 'new-character') {
         const writeField = await getWriteExtensionField();
-        const characterId = Number(context.characterId);
-        if (typeof writeField === 'function') {
+        const characterId = target.characterId;
+        const character = context.characters?.[characterId];
+        if (character?.avatar !== target.avatar) {
+            bindingNote = ' 현재 카드가 바뀌어 자동 연결하지 않았어요. 원래 캐릭터의 🌐 버튼에서 이 로어북을 연결해 주세요.';
+        } else if (typeof writeField === 'function') {
             try {
                 await writeField(characterId, 'world', target.name);
-                const character = context.characters?.[characterId];
-                if (character) {
-                    character.data = character.data && typeof character.data === 'object' ? character.data : {};
-                    character.data.extensions = character.data.extensions && typeof character.data.extensions === 'object' ? character.data.extensions : {};
-                    character.data.extensions.world = target.name;
+                if (character.data?.extensions?.world !== target.name) {
+                    throw new Error('카드의 로어북 연결값이 갱신되지 않았습니다.');
                 }
+                // The character editor can hold an older form value. Keep it in
+                // sync so a later edit does not silently clear the new binding.
+                if (typeof document !== 'undefined') {
+                    const picker = document.getElementById('set_character_world');
+                    const editorId = globalThis.$ && picker
+                        ? globalThis.$(picker).data('chid')
+                        : picker?.dataset.chid;
+                    if (Number(editorId) === characterId && editorId !== undefined && editorId !== null) {
+                        const field = document.getElementById('character_world');
+                        if (field) field.value = target.name;
+                        picker.classList.add('world_set');
+                        document.getElementById('world_button')?.classList.add('world_set');
+                    }
+                }
+                bindingNote = ' 캐릭터 로어북 연결값을 확인했어요.';
             } catch (error) {
                 console.warn(`${LOG_PREFIX} 카드 로어북 자동 연결 실패`, error);
                 bindingNote = ' 카드 자동 연결에는 실패했으니 캐릭터 패널의 🌐 버튼에서 이 로어북을 직접 선택해 주세요.';

@@ -47,6 +47,27 @@ test('영어 이름은 문장 중간 등장이 있어야 후보가 된다', () =
     assert.equal(firstWordOnly.some((candidate) => candidate.name === 'Veyra'), false);
 });
 
+test('지명과 도로명은 제외하고 같은 장면의 NPC 이름은 유지한다', () => {
+    const messages = [
+        { id: 'm1', text: 'Ophelia left California and reached Seoul by dawn. She turned onto Wren Street near the Pacific Ocean.' },
+        { id: 'm2', text: 'Ophelia flew from Incheon and crossed Wren Street. The Pacific wind reminded her of California.' },
+        { id: 'm3', text: 'He spoke to Ophelia in Seoul before heading toward Incheon.' },
+    ];
+    const names = detectNpcCandidates(messages, []).map((candidate) => candidate.name);
+    assert.ok(names.includes('Ophelia'));
+    for (const place of ['California', 'Street', 'Seoul', 'Pacific', 'Incheon', 'Wren']) {
+        assert.equal(names.includes(place), false, `${place} should not be an NPC`);
+    }
+
+    const koreanPlaces = detectNpcCandidates([
+        { id: 'k1', text: '서울에서 민수가 인천으로 떠났다.' },
+        { id: 'k2', text: '인천에 도착한 민수는 서울을 떠올렸다.' },
+    ], []).map((candidate) => candidate.name);
+    assert.ok(koreanPlaces.includes('민수'));
+    assert.equal(koreanPlaces.includes('서울'), false);
+    assert.equal(koreanPlaces.includes('인천'), false);
+});
+
 test('페르소나·캐릭터 이름의 소유격은 후보로 잡지 않고, NPC 소유격은 원형과 합산한다', () => {
     const messages = [
         { id: 'm1', text: "Dana's coffee sat untouched while Kieran's jaw tightened." },

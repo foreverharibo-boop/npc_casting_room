@@ -36,6 +36,7 @@ function makeContext(overrides = {}) {
         chat: makeChat(),
         saveSettingsDebounced() {},
         saveMetadataDebounced() {},
+        updateWorldInfoList: async () => {},
         generateRaw: async () => PROFILE_JSON,
         ...overrides,
     };
@@ -58,7 +59,11 @@ test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연
     const context = makeContext({
         loadWorldInfo: async () => null,
         saveWorldInfo: async (name, data) => saved.push({ name, data }),
-        writeExtensionField: async (...args) => fieldWrites.push(args),
+        writeExtensionField: async (...args) => {
+            fieldWrites.push(args);
+            context.characters[args[0]].data.extensions ??= {};
+            context.characters[args[0]].data.extensions[args[1]] = args[2];
+        },
     });
     globalThis.SillyTavern = { getContext: () => context };
     globalThis.toastr = { info() {}, success() {}, error() {} };
@@ -78,9 +83,33 @@ test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연
     assert.equal(entry.constant, false);
     assert.deepEqual(fieldWrites, [[0, 'world', '캐스팅룸-Peter']]);
     assert.equal(context.characters[0].data.extensions.world, '캐스팅룸-Peter');
+    assert.match(result.note, /연결값을 확인/);
     const tracked = context.extensionSettings.npcCastingRoom.createdEntries['캐스팅룸-Peter'];
     assert.equal(tracked.length, 1);
     assert.equal(tracked[0].name, '민수');
+    module.onDisable();
+});
+
+test('카드 연결 함수가 조용히 실패해도 연결 성공으로 표시하지 않고 다음 저장 때 재시도한다', async () => {
+    let book = null;
+    let attempts = 0;
+    const context = makeContext({
+        loadWorldInfo: async () => book,
+        saveWorldInfo: async (name, data) => { book = structuredClone(data); },
+        writeExtensionField: async () => { attempts += 1; },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?binding-noop=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const first = await module.createNpcLorebookEntry(candidate);
+    assert.equal(first.ok, true);
+    assert.match(first.note, /자동 연결에는 실패/);
+    assert.equal(context.characters[0].data.extensions?.world, undefined);
+    const second = await module.createNpcLorebookEntry(candidate);
+    assert.equal(second.ok, true);
+    assert.equal(attempts, 2);
+    assert.equal(Object.keys(book.entries).length, 1);
     module.onDisable();
 });
 
