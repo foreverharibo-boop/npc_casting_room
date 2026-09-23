@@ -498,6 +498,66 @@ export function sanitizeNpcUpdates(raw, existingContent, sceneText) {
     return facts;
 }
 
+/** Proposed edits must cite the current chat and point at one exact place in the existing entry. */
+export function sanitizeNpcChangeSuggestions(raw, existingContent, sceneText) {
+    if (!raw || typeof raw !== 'object' || (raw.new_facts !== undefined && !Array.isArray(raw.new_facts)) ||
+        (raw.replacements !== undefined && !Array.isArray(raw.replacements))) return null;
+    const whole = JSON.stringify(raw);
+    if (/\b(?:ignore|override|disregard)\b.{0,40}\b(?:instruction|prompt|rule)s?\b/i.test(whole)
+        || /\b(?:reveal|print|repeat)\b.{0,40}\b(?:system prompt|hidden instruction)s?\b/i.test(whole)) return null;
+    const source = normalizeForMatch(sceneText);
+    const known = normalizeForMatch(existingContent);
+    const replacements = [];
+    const occupied = [];
+    for (const item of (raw.replacements ?? []).slice(0, 30)) {
+        const oldText = String(item?.old_text ?? '').replace(/\r/g, '').trim();
+        const newText = String(item?.new_text ?? '').replace(/\r/g, '').trim();
+        const evidence = cleanProfileText(item?.evidence, 2000);
+        if (oldText.length < 4 || oldText.length > 2000 || !newText || newText.length > 2000 ||
+            !evidence || evidence.length < 8 || !source.includes(normalizeForMatch(evidence)) ||
+            normalizeForMatch(oldText) === normalizeForMatch(newText) ||
+            /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(newText)) continue;
+        const start = existingContent.indexOf(oldText);
+        if (start < 0 || existingContent.indexOf(oldText, start + 1) !== -1) continue;
+        const end = start + oldText.length;
+        if (occupied.some(([from, to]) => start < to && end > from)) continue;
+        occupied.push([start, end]);
+        replacements.push({ oldText, newText, evidence, selected: true });
+    }
+    const newFacts = [];
+    const seen = new Set();
+    for (const item of (raw.new_facts ?? []).slice(0, 50)) {
+        const text = cleanProfileText(item?.fact, 2000);
+        const evidence = cleanProfileText(item?.evidence, 2000);
+        const normalized = normalizeForMatch(text);
+        if (!text || !evidence || evidence.length < 8 || !source.includes(normalizeForMatch(evidence)) ||
+            known.includes(normalized) || seen.has(normalized)) continue;
+        seen.add(normalized);
+        newFacts.push({ text, evidence, selected: true });
+    }
+    return { replacements, newFacts };
+}
+
+export function composeNpcUpdateContent(baseContent, suggestions, outputLanguage = 'english') {
+    const base = String(baseContent ?? '');
+    const selected = (suggestions?.replacements ?? []).filter((item) => item.selected);
+    const spans = selected.map((item) => ({ ...item, start: base.indexOf(item.oldText) }));
+    if (spans.some((item) => item.start < 0 || base.indexOf(item.oldText, item.start + 1) !== -1)) {
+        throw new Error('기존 값이 바뀌었어요. 다시 갱신해 주세요.');
+    }
+    spans.sort((a, b) => b.start - a.start);
+    let content = base;
+    for (const item of spans) {
+        content = `${content.slice(0, item.start)}${item.newText}${content.slice(item.start + item.oldText.length)}`;
+    }
+    const facts = (suggestions?.newFacts ?? []).filter((item) => item.selected).map((item) => item.text);
+    if (facts.length) {
+        const heading = outputLanguage === 'korean' ? '> 추가 정보' : '> ADDITIONAL FACTS';
+        content += `\n\n${heading}\n${facts.map((fact) => `- ${fact}`).join('\n')}`;
+    }
+    return content;
+}
+
 export function buildLorebookContent(npc) {
     const lines = [`[NPC: ${npc.name}]`];
     if (npc.aliases?.length) lines.push(`별칭·호칭: ${npc.aliases.join(', ')}`);

@@ -310,6 +310,48 @@ test('갱신 초안을 만든 뒤 기존 항목을 수정했다면 이전 내용
     module.onDisable();
 });
 
+test('갱신에서 기존 외모 변경과 새 사실을 각각 고르고 선택한 것만 저장한다', async () => {
+    let book = { entries: { 0: {
+        uid: 0, key: ['민수'], comment: '🎭 민수', content: '[NPC: 민수]\n> APPEARANCE\n- Hair: Black hair',
+    } } };
+    let writes = 0;
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { createdEntries: {
+            기존월드: [{ name: '민수', sourceNames: ['민수'], uid: 0, world: '기존월드' }],
+        } } },
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존월드' } } }],
+        chat: [
+            { name: 'Peter', mes: '민수는 밝은 금발로 염색했다.' },
+            { name: 'Peter', mes: '민수가 동생에게 열쇠를 맡겼다.' },
+        ],
+        generateRaw: async () => JSON.stringify({
+            replacements: [{ old_text: '- Hair: Black hair', new_text: '- Hair: Blonde hair', evidence: '민수는 밝은 금발로 염색했다.' }],
+            new_facts: [{ fact: 'He gave his sister a key.', evidence: '민수가 동생에게 열쇠를 맡겼다.' }],
+        }),
+        loadWorldInfo: async () => structuredClone(book),
+        saveWorldInfo: async (_name, data) => { writes += 1; book = structuredClone(data); },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?selective-update=${Date.now()}`);
+    const prepared = await module.prepareNpcDraft({ name: '민수' });
+    assert.equal(prepared.ok, true);
+    assert.match(prepared.draft.content, /Hair: Blonde hair/);
+    assert.match(prepared.draft.content, /He gave his sister a key/);
+    prepared.draft.updateSuggestions.replacements[0].selected = false;
+    prepared.draft.updateSuggestions.newFacts[0].selected = false;
+    const empty = await module.saveNpcDraft(prepared.draft);
+    assert.equal(empty.ok, false);
+    assert.equal(writes, 0);
+    prepared.draft.updateSuggestions.replacements[0].selected = true;
+    const saved = await module.saveNpcDraft(prepared.draft);
+    assert.equal(saved.ok, true);
+    assert.equal(writes, 1);
+    assert.match(book.entries[0].content, /Hair: Blonde hair/);
+    assert.doesNotMatch(book.entries[0].content, /He gave his sister a key/);
+    module.onDisable();
+});
+
 test('삭제된 NPC 항목만 다시 생성하고 복구된 항목이나 다른 항목은 덮어쓰지 않는다', async () => {
     let book = { entries: { 1: { uid: 1, key: ['다른 인물'], content: '다른 인물의 원본.' } } };
     let calls = 0;
@@ -714,12 +756,12 @@ test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한
     assert.match(entry.content, /Name: 민수/);
     assert.doesNotMatch(entry.content, /\[NPC: 민수\]/);
 
-    // 갱신에서는 기존 본문을 다시 쓰지 않고 새 사실만 요청한다.
+    // 갱신에서는 기존 본문 전체를 다시 쓰지 않고 변경점만 요청한다.
     context.extensionSettings.npcCastingRoom.inferMissing = false;
     const noUpdate = await module.createNpcLorebookEntry(candidate);
     assert.equal(noUpdate.ok, false);
-    assert.match(noUpdate.reason, /추가할 사실/);
-    assert.match(prompts[1][0].content, /only NEW/);
+    assert.match(noUpdate.reason, /변경점이나 새 사실/);
+    assert.match(prompts[1][0].content, /old_text.*new_text/);
     assert.equal(saved.length, 1);
     module.onDisable();
 });

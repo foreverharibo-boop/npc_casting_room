@@ -149,6 +149,52 @@
   font-size: 0.88em;
 }
 
+#npcc-settings .npcc-update-choices {
+  margin: 8px 0;
+}
+
+#npcc-settings .npcc-update-choices > strong {
+  display: block;
+  margin-top: 12px;
+}
+
+#npcc-settings .npcc-update-choices > small {
+  display: block;
+  opacity: 0.75;
+}
+
+#npcc-settings .npcc-update-choice {
+  display: block;
+  margin: 6px 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 7px;
+}
+
+#npcc-settings .npcc-update-choice label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+#npcc-settings .npcc-update-choice input {
+  flex: 0 0 auto;
+  margin-top: 0.25em;
+}
+
+#npcc-settings .npcc-update-choice span,
+#npcc-settings .npcc-update-choice details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+#npcc-settings .npcc-update-choice details {
+  margin: 4px 0 0 25px;
+  font-size: 0.88em;
+}
+
 #npcc-settings .npcc-merge-bar {
   display: flex;
   flex-direction: row;

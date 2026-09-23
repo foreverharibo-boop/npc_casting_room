@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
     buildEntryKeys,
     buildLorebookContent,
+    composeNpcUpdateContent,
     detectNpcCandidates,
     removeInferenceMarkers,
     sanitizeNpcProfile,
+    sanitizeNpcChangeSuggestions,
     sanitizeNpcUpdates,
     sanitizeSheetProfile,
     stripDecorations,
@@ -191,6 +193,39 @@ test('갱신 사실은 장면 근거가 있고 기존 본문에 없는 경우만
     ] }, '알려진 사실: 바를 운영한다', '민수가 바를 운영한다. 민수가 동생에게 열쇠를 맡겼다.');
     assert.deepEqual(facts, ['동생에게 열쇠를 맡겼다']);
     assert.deepEqual(sanitizeNpcUpdates({ new_facts: [] }, '원본', '장면'), []);
+});
+
+test('근거 있는 기존 값 변경과 새 사실을 분리하고 선택한 내용만 반영한다', () => {
+    const original = '[NPC: 민수]\n> APPEARANCE\n- Hair: Black hair\n> PERSONALITY\n- Quiet';
+    const scene = '민수는 밝은 금발로 염색했다. 민수가 동생에게 열쇠를 맡겼다.';
+    const suggestions = sanitizeNpcChangeSuggestions({
+        replacements: [
+            { old_text: '- Hair: Black hair', new_text: '- Hair: Blonde hair', evidence: '민수는 밝은 금발로 염색했다.' },
+            { old_text: '- Quiet', new_text: '- Loud', evidence: '근거 없는 문장이다.' },
+            { old_text: '- Black', new_text: '- Blonde', evidence: '민수는 밝은 금발로 염색했다.' },
+        ],
+        new_facts: [
+            { fact: '동생에게 열쇠를 맡겼다', evidence: '민수가 동생에게 열쇠를 맡겼다.' },
+            { fact: '새 차를 샀다', evidence: '근거 없는 문장이다.' },
+        ],
+    }, original, scene);
+    assert.equal(suggestions.replacements.length, 1);
+    assert.equal(suggestions.newFacts.length, 1);
+    assert.match(composeNpcUpdateContent(original, suggestions), /- Hair: Blonde hair/);
+    assert.match(composeNpcUpdateContent(original, suggestions), /동생에게 열쇠를 맡겼다/);
+    suggestions.replacements[0].selected = false;
+    assert.match(composeNpcUpdateContent(original, suggestions), /- Hair: Black hair/);
+    suggestions.newFacts[0].selected = false;
+    assert.equal(composeNpcUpdateContent(original, suggestions), original);
+});
+
+test('같은 기존 문구가 여러 곳에 있으면 교체 제안을 제외한다', () => {
+    const original = 'Hair: Black hair\nNote: Black hair';
+    const result = sanitizeNpcChangeSuggestions({
+        replacements: [{ old_text: 'Black hair', new_text: 'Blonde hair', evidence: '민수가 금발로 염색했다.' }],
+        new_facts: [],
+    }, original, '민수가 금발로 염색했다.');
+    assert.deepEqual(result.replacements, []);
 });
 
 test('시트 양식 프로필은 태그와 줄바꿈 구조를 보존하고 탈취 지시는 거부한다', () => {
