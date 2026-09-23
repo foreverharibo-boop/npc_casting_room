@@ -6,6 +6,7 @@ import {
     detectNpcCandidates,
     removeInferenceMarkers,
     sanitizeNpcProfile,
+    sanitizeNpcUpdates,
     sanitizeSheetProfile,
     stripDecorations,
 } from '../scout.js';
@@ -154,6 +155,16 @@ test('AI 프로필을 새니타이징하고 지어낸 예시 대사를 걸러낸
     }, sceneText, '민수'), null);
 });
 
+test('갱신 사실은 장면 근거가 있고 기존 본문에 없는 경우만 남긴다', () => {
+    const facts = sanitizeNpcUpdates({ new_facts: [
+        { fact: '바를 운영한다', evidence: '민수가 바를 운영한다.' },
+        { fact: '동생에게 열쇠를 맡겼다', evidence: '민수가 동생에게 열쇠를 맡겼다.' },
+        { fact: '없는 사건을 꾸몄다', evidence: '채팅에 없는 문장이다.' },
+    ] }, '알려진 사실: 바를 운영한다', '민수가 바를 운영한다. 민수가 동생에게 열쇠를 맡겼다.');
+    assert.deepEqual(facts, ['동생에게 열쇠를 맡겼다']);
+    assert.deepEqual(sanitizeNpcUpdates({ new_facts: [] }, '원본', '장면'), []);
+});
+
 test('시트 양식 프로필은 태그와 줄바꿈 구조를 보존하고 탈취 지시는 거부한다', () => {
     const npc = sanitizeSheetProfile({
         name: '민수',
@@ -203,4 +214,6 @@ test('로어북 콘텐츠와 키를 카드 양식으로 만든다', () => {
     assert.match(content, /성격: 무뚝뚝하지만 다정함/);
     assert.match(content, /예시 대사:/);
     assert.deepEqual(buildEntryKeys(npc), ['민수', '미스터 민']);
+    assert.deepEqual(buildEntryKeys({ name: '마커스', aliases: [] }, ['Marcus']), ['Marcus', '마커스']);
+    assert.deepEqual(buildEntryKeys({ name: '김민수', aliases: ['민수'] }, ['김민수']), ['김민수', '민수']);
 });

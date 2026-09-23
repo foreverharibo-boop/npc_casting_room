@@ -404,6 +404,29 @@ export function sanitizeSheetProfile(raw, sceneText, fallbackName = '') {
     return { name, aliases, sheet, exampleLines };
 }
 
+/** Keep only genuinely new, scene-grounded additions for an existing entry. */
+export function sanitizeNpcUpdates(raw, existingContent, sceneText) {
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.new_facts)) return null;
+    const whole = JSON.stringify(raw);
+    if (/\b(?:ignore|override|disregard)\b.{0,40}\b(?:instruction|prompt|rule)s?\b/i.test(whole)
+        || /\b(?:reveal|print|repeat)\b.{0,40}\b(?:system prompt|hidden instruction)s?\b/i.test(whole)) return null;
+    const source = normalizeForMatch(sceneText);
+    const known = normalizeForMatch(existingContent);
+    const seen = new Set();
+    const facts = [];
+    for (const item of raw.new_facts) {
+        const fact = cleanProfileText(item?.fact, 200000);
+        const evidence = cleanProfileText(item?.evidence, 2000);
+        const normalized = normalizeForMatch(fact);
+        if (!fact || !evidence || evidence.length < 8) continue;
+        if (!source.includes(normalizeForMatch(evidence))) continue;
+        if (known.includes(normalized) || seen.has(normalized)) continue;
+        seen.add(normalized);
+        facts.push(fact);
+    }
+    return facts;
+}
+
 export function buildLorebookContent(npc) {
     const lines = [`[NPC: ${npc.name}]`];
     if (npc.aliases?.length) lines.push(`별칭·호칭: ${npc.aliases.join(', ')}`);
@@ -433,8 +456,10 @@ export function removeInferenceMarkers(content) {
         .replace(/[ \t]{2,}/g, ' ');
 }
 
-export function buildEntryKeys(npc) {
-    return [npc.name, ...(npc.aliases ?? [])]
+export function buildEntryKeys(npc, sourceNames = []) {
+    // Activation must work in the original chat language even when the AI
+    // renders the NPC's name in the lorebook's selected output language.
+    return [...sourceNames, npc.name, ...(npc.aliases ?? [])]
         .map((value) => String(value ?? '').trim())
         .filter(Boolean)
         .filter((value, index, all) => all.indexOf(value) === index)
