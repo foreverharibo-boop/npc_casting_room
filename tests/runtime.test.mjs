@@ -99,6 +99,83 @@ test('채팅 사용자 이름도 NPC 후보에서 제외한다', async () => {
     module.onDisable();
 });
 
+test('다른 카드의 동명이인과 카드 목록의 이름은 현재 카드 후보를 가리지 않는다', async () => {
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { createdEntries: {
+            '다른카드-로어북': [{ name: '민수', sourceNames: ['민수'], uid: 3 }],
+        } } },
+        characters: [
+            { name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '현재-로어북' } } },
+            { name: '민수', avatar: 'other-card.png', data: {} },
+        ],
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?same-name-other-card=${Date.now()}`);
+    assert.equal(module.scanCandidates().some((item) => item.name === '민수'), true);
+    module.onDisable();
+});
+
+test('AI 스캔 뒤 채팅이 바뀌면 옛 장면으로 NPC 초안을 만들지 않는다', async () => {
+    let calls = 0;
+    const context = makeContext({
+        chat: [
+            { name: 'Peter', mes: '라온이 웃으며 문을 열었다.' },
+            { name: 'Peter', mes: '라온은 손을 흔들며 인사했다.' },
+        ],
+        loadWorldInfo: async () => null,
+        saveWorldInfo: async () => {},
+        generateRaw: async () => {
+            calls += 1;
+            return JSON.stringify({ npcs: [{ name: '라온', evidence: ['라온이 웃으며 문을 열었다.'] }] });
+        },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?ai-current-scenes=${Date.now()}`);
+    assert.equal((await module.scanCandidatesWithAi()).count, 1);
+    context.chat = [
+        { name: 'Peter', mes: '새 장면에는 다른 사람만 등장한다.' },
+        { name: 'Peter', mes: '복도에서 조용한 대화가 이어졌다.' },
+    ];
+    const draft = await module.prepareNpcDraft({ name: '라온' });
+    assert.equal(draft.ok, false);
+    assert.match(draft.reason, /등장한 장면을 찾지 못했어요/);
+    assert.equal(calls, 1);
+    module.onDisable();
+});
+
+test('AI 스캔 뒤 메시지를 수정하면 API 호출 없이 후보를 현재 답변 기준으로 갱신한다', async () => {
+    const handlers = new Map();
+    let calls = 0;
+    const context = makeContext({
+        eventTypes: { APP_READY: 'app_ready', MESSAGE_EDITED: 'message_edited' },
+        eventSource: { on(event, fn) { handlers.set(event, fn); }, removeListener(event) { handlers.delete(event); } },
+        chat: [
+            { name: 'Peter', mes: '라온이 웃으며 문을 열었다.' },
+            { name: 'Peter', mes: '라온은 손을 흔들며 인사했다.' },
+        ],
+        generateRaw: async () => {
+            calls += 1;
+            return JSON.stringify({ npcs: [{ name: '라온', evidence: ['라온이 웃으며 문을 열었다.'] }] });
+        },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?ai-edit-refresh=${Date.now()}`);
+    module.onEnable();
+    assert.equal((await module.scanCandidatesWithAi()).count, 1);
+    context.chat = [
+        { name: 'Peter', mes: '복도에서 다른 사람이 문을 열었다.' },
+        { name: 'Peter', mes: '그는 조용히 손을 흔들었다.' },
+    ];
+    handlers.get('message_edited')();
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    assert.equal(module.ignoreCandidates(['라온']), 0);
+    assert.equal(calls, 1);
+    module.onDisable();
+});
+
 test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연결한다', async () => {
     const saved = [];
     const fieldWrites = [];
@@ -258,7 +335,7 @@ test('삭제된 NPC 항목만 다시 생성하고 복구된 항목이나 다른 
     assert.equal(prepared.ok, true);
     assert.deepEqual(prepared.draft.recreateOf, { book: '기존월드', uid: 0, name: '민수' });
     assert.equal(writes, 0);
-    book.entries[0] = { uid: 0, key: ['복구'], content: '돌아온 원본.' };
+    book.entries[0] = { uid: 0, key: ['민수'], comment: '🎭 민수', content: '돌아온 원본.' };
     await assert.rejects(() => module.saveNpcDraft(prepared.draft), /덮어쓰지 않았으니/);
     assert.equal(writes, 0);
     assert.equal(book.entries[0].content, '돌아온 원본.');
@@ -272,6 +349,58 @@ test('삭제된 NPC 항목만 다시 생성하고 복구된 항목이나 다른 
     assert.equal(context.extensionSettings.npcCastingRoom.createdEntries['기존월드'].length, 1);
     assert.equal(context.extensionSettings.npcCastingRoom.createdEntries['기존월드'][0].uid, 2);
     assert.equal((await module.refreshCreatedEntryStatus()).get('기존월드:2'), 'present');
+    module.onDisable();
+});
+
+test('삭제된 UID가 다른 NPC에게 재사용되면 갱신을 막고 새 UID로 다시 생성한다', async () => {
+    let book = { entries: { 0: { uid: 0, key: ['다른 NPC'], comment: '🎭 다른 NPC', content: '다른 사람의 원본.' } } };
+    let calls = 0;
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { createdEntries: {
+            기존월드: [{ name: '민수', sourceNames: ['민수'], uid: 0, world: '기존월드' }],
+        } } },
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존월드' } } }],
+        loadWorldInfo: async () => structuredClone(book),
+        saveWorldInfo: async (_name, data) => { book = structuredClone(data); },
+        generateRaw: async () => { calls += 1; return PROFILE_JSON; },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?uid-reused=${Date.now()}`);
+    module.scanCandidates();
+    assert.equal((await module.refreshCreatedEntryStatus()).get('기존월드:0'), 'conflict');
+    await assert.rejects(() => module.prepareNpcDraft({ name: '민수' }), /다른 로어북 항목/);
+    assert.equal(calls, 0);
+    const prepared = await module.prepareNpcDraft({ name: '민수' }, { recreateEntry: { name: '민수', uid: 0 } });
+    assert.equal(prepared.ok, true);
+    const saved = await module.saveNpcDraft(prepared.draft);
+    assert.equal(saved.uid, 1);
+    assert.equal(book.entries[0].content, '다른 사람의 원본.');
+    assert.deepEqual(book.entries[0].key, ['다른 NPC']);
+    assert.match(book.entries[1].comment, /\[npcc:/);
+    assert.equal(context.extensionSettings.npcCastingRoom.createdEntries['기존월드'][0].uid, 1);
+    module.onDisable();
+});
+
+test('새 항목은 식별 표식으로 구별해 같은 이름의 다른 항목도 덮어쓰지 않는다', async () => {
+    let book = { entries: {} };
+    const context = makeContext({
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존월드' } } }],
+        loadWorldInfo: async () => book,
+        saveWorldInfo: async (_name, data) => { book = structuredClone(data); },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?marker-guard=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const created = await module.createNpcLorebookEntry(candidate);
+    assert.equal(created.ok, true);
+    const marker = context.extensionSettings.npcCastingRoom.createdEntries['기존월드'][0].marker;
+    assert.ok(marker);
+    book.entries[created.uid] = { uid: created.uid, key: ['민수'], comment: '🎭 민수', content: '다른 동명이인의 원본.' };
+    assert.equal((await module.refreshCreatedEntryStatus()).get(`기존월드:${created.uid}`), 'conflict');
+    await assert.rejects(() => module.prepareNpcDraft(candidate), /다른 로어북 항목/);
+    assert.equal(book.entries[created.uid].content, '다른 동명이인의 원본.');
     module.onDisable();
 });
 

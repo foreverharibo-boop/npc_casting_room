@@ -25,7 +25,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.9';
+const EXTENSION_VERSION = '1.6.10';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -55,6 +55,7 @@ let eventsRegistered = false;
 let lastCandidates = [];
 let lastMessages = [];
 let lastDetected = [];
+let aiScanSeeds = [];
 let scanMode = 'local';
 let scanEpoch = 0;
 let aiScanning = false;
@@ -149,20 +150,23 @@ export function knownCharacterNames() {
     for (const message of Array.isArray(context.chat) ? context.chat : []) {
         if (message?.is_user && message.name) names.push(message.name);
     }
-    for (const character of Array.isArray(context.characters) ? context.characters : []) {
+    const characters = Array.isArray(context.characters) ? context.characters : [];
+    if (isGroupChat(context)) {
+        const group = (context.groups ?? []).find((item) => String(item?.id) === String(context.groupId));
+        if (group?.name) names.push(group.name);
+        for (const member of group?.members ?? []) {
+            const character = characters.find((item) => item?.avatar === member || item?.name === member);
+            if (character?.name) names.push(character.name);
+        }
+    } else {
+        const character = characters[Number(context.characterId)];
         if (character?.name) names.push(character.name);
     }
-    if (Array.isArray(context.groups)) {
-        for (const group of context.groups) {
-            if (group?.name) names.push(group.name);
-        }
-    }
     const settings = getSettings();
-    for (const entries of Object.values(settings.createdEntries)) {
-        for (const entry of Array.isArray(entries) ? entries : []) {
-            if (entry?.name) names.push(entry.name);
-            if (Array.isArray(entry?.sourceNames)) names.push(...entry.sourceNames);
-        }
+    const entries = settings.createdEntries[currentBookNameForUi()];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+        if (entry?.name) names.push(entry.name);
+        if (Array.isArray(entry?.sourceNames)) names.push(...entry.sourceNames);
     }
     return names.filter(Boolean);
 }
@@ -260,6 +264,7 @@ function applyDetectedCandidates() {
 export function scanCandidates() {
     scanEpoch += 1;
     scanMode = 'local';
+    aiScanSeeds = [];
     lastMessages = collectRecentMessages();
     lastDetected = detectNpcCandidates(lastMessages, knownCharacterNames(), {
         minMessages: Number(getSettings().minMessages) || DEFAULT_SETTINGS.minMessages,
@@ -290,10 +295,9 @@ export async function scanCandidatesWithAi() {
         const response = await requestNpcProfile(prompt, requestAbortController.signal);
         const parsed = parseProfileResponse(response);
         if (epoch !== scanEpoch || scope !== dismissScopeKey() || !runtimeActive) return { ok: false, reason: '스캔 대상이 바뀌어 이전 AI 결과를 버렸어요.' };
-        lastMessages = messages;
-        lastDetected = validateAiNpcCandidates(parsed, messages, knownCharacterNames(), { minMessages: settings.minMessages });
+        aiScanSeeds = validateAiNpcCandidates(parsed, messages, knownCharacterNames(), { minMessages: settings.minMessages });
         scanMode = 'ai';
-        applyDetectedCandidates();
+        refreshAiCandidates();
         updateUi();
         return { ok: true, count: lastCandidates.length };
     } finally {
@@ -410,6 +414,31 @@ function containsName(text, name) {
         return new RegExp(`(^|[^가-힣])${escaped}`, 'u').test(haystack);
     }
     return haystack.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
+}
+
+function refreshAiCandidates() {
+    lastMessages = collectRecentMessages();
+    const minMessages = Math.max(2, Number(getSettings().minMessages) || 2);
+    const known = new Set(knownCharacterNames().map((name) => String(name).toLocaleLowerCase()));
+    lastDetected = aiScanSeeds.flatMap((candidate) => {
+        if (known.has(candidate.name.toLocaleLowerCase())) return [];
+        const matched = lastMessages.map((message) => ({ message, clean: stripDecorations(message.text) }))
+            .filter(({ clean }) => containsName(clean, candidate.name));
+        if (matched.length < minMessages) return [];
+        return [{
+            ...candidate,
+            count: matched.length,
+            mentions: matched.length,
+            messageIds: matched.map(({ message }) => message.id),
+            evidence: matched.slice(0, 10).map(({ message, clean }) => {
+                const index = clean.toLocaleLowerCase().indexOf(candidate.name.toLocaleLowerCase());
+                return { messageId: message.id, snippet: clean.slice(Math.max(0, index - 75), index + 125) };
+            }),
+            dialogueLines: [],
+            score: matched.length * 11,
+        }];
+    });
+    return applyDetectedCandidates();
 }
 
 function referenceSheetText() {
@@ -657,6 +686,28 @@ function trackedEntries(bookName) {
     return settings.createdEntries[bookName];
 }
 
+function entryBelongsToTracked(entry, tracked) {
+    if (!entry || typeof entry !== 'object' || !tracked) return false;
+    const comment = String(entry.comment ?? '').trim();
+    if (tracked.marker) return comment.includes(`[npcc:${tracked.marker}]`);
+    // Old entries have no marker. Check their memo and original name keys
+    // before adopting one; a reused UID with another name must not be edited.
+    if (/\[npcc:[^\]]+\]/.test(comment)) return false;
+    if (comment.startsWith('🎭 ') && comment !== `🎭 ${tracked.name}`) return false;
+    return comment === `🎭 ${tracked.name}` ||
+        (Array.isArray(entry.key) && entry.key.some((key) =>
+            [tracked.name, ...(tracked.sourceNames ?? [])].some((name) =>
+                String(key).trim().toLocaleLowerCase() === String(name).trim().toLocaleLowerCase())));
+}
+
+function newEntryMarker() {
+    return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function entryMemo(name, marker) {
+    return `🎭 ${name} [npcc:${marker}]`;
+}
+
 async function promptForName(defaultName) {
     const popup = getContext().Popup;
     try {
@@ -688,6 +739,9 @@ export async function prepareNpcDraft(candidate, options = {}) {
         return { ok: false, reason: '설정에서 직접 설정 양식의 프롬프트를 입력해 주세요.' };
     }
 
+    // The candidate may come from an earlier AI scan. Always use the current
+    // active swipes and scan window when preparing a new draft.
+    lastMessages = collectRecentMessages();
     const sceneText = buildScenesFor(candidate);
     if (!sceneText) return { ok: false, reason: '이 NPC가 등장한 장면을 찾지 못했어요. 다시 스캔해 주세요.' };
 
@@ -711,13 +765,16 @@ export async function prepareNpcDraft(candidate, options = {}) {
                     throw new Error('로어북을 읽지 못했습니다.');
                 }
                 existingEntry = data?.entries?.[existing.uid];
-                if (recreateEntry && existingEntry) {
+                if (recreateEntry && entryBelongsToTracked(existingEntry, existing)) {
                     return { ok: false, reason: '항목이 이미 복구됐어요. 「갱신」을 사용해 주세요.' };
+                }
+                if (!recreateEntry && existingEntry && !entryBelongsToTracked(existingEntry, existing)) {
+                    throw new Error('항목 번호를 다른 로어북 항목이 사용 중이에요. 「다시 생성」을 사용해 주세요.');
                 }
                 if (!recreateEntry && (!existingEntry || typeof existingEntry.content !== 'string')) {
                     throw new Error('기존 NPC 항목을 찾지 못했습니다.');
                 }
-                if (existingEntry) existingContent = existingEntry.content;
+                if (existingEntry && !recreateEntry) existingContent = existingEntry.content;
             } catch (error) {
                 throw new Error(`기존 NPC 항목을 읽지 못해 갱신을 중단했어요. ${error.message ?? ''}`);
             }
@@ -839,22 +896,28 @@ export async function saveNpcDraft(draft) {
         if (recovery.book !== target.name || !existing || existing.uid !== recovery.uid || existing.name !== recovery.name) {
             throw new Error('NPC 기록이 바뀌었어요. 항목 상태를 다시 확인해 주세요.');
         }
-        if (data.entries[recovery.uid]) {
+        if (entryBelongsToTracked(data.entries[recovery.uid], existing)) {
             throw new Error('삭제된 항목이 다시 나타났어요. 덮어쓰지 않았으니 「갱신」을 사용해 주세요.');
         }
     }
 
+    if (existing && !draft.recreateOf && data.entries[existing.uid] && !entryBelongsToTracked(data.entries[existing.uid], existing)) {
+        throw new Error('항목 번호를 다른 로어북 항목이 사용 중이에요. 덮어쓰지 않았으니 「다시 생성」을 사용해 주세요.');
+    }
+
     const uids = Object.keys(data.entries).map(Number).filter(Number.isFinite);
-    const uid = existing && data.entries[existing.uid] ? Number(existing.uid) : (uids.length ? Math.max(...uids) + 1 : 0);
+    const uid = existing && !draft.recreateOf && entryBelongsToTracked(data.entries[existing.uid], existing)
+        ? Number(existing.uid) : (uids.length ? Math.max(...uids) + 1 : 0);
     const previous = data.entries[uid] && typeof data.entries[uid] === 'object' ? data.entries[uid] : null;
     if (draft.baseContent !== undefined && (!previous || previous.content !== draft.baseContent)) {
         throw new Error('초안을 만든 뒤 로어북 내용이 바뀌었어요. 다시 갱신해서 최신 내용을 확인해 주세요.');
     }
+    const marker = existing?.marker || newEntryMarker();
     data.entries[uid] = {
-        ...(previous ?? newEntryTemplate(uid, draft.keys, `🎭 ${draft.npcName}`, draft.content)),
+        ...(previous ?? newEntryTemplate(uid, draft.keys, entryMemo(draft.npcName, marker), draft.content)),
         uid,
         key: draft.keys,
-        comment: `🎭 ${draft.npcName}`,
+        comment: entryMemo(draft.npcName, marker),
         content: draft.content,
     };
     await worldApi.saveWorldInfo(target.name, data, true);
@@ -903,9 +966,10 @@ export async function saveNpcDraft(draft) {
         existing.name = draft.npcName;
         existing.sourceNames = [...new Set([...(existing.sourceNames ?? []), ...sourceNames])];
         existing.uid = uid;
+        existing.marker = marker;
         existing.updatedAt = Date.now();
     } else {
-        tracked.push({ name: draft.npcName, sourceNames, uid, world: target.name, createdAt: Date.now(), updatedAt: Date.now() });
+        tracked.push({ name: draft.npcName, sourceNames, uid, marker, world: target.name, createdAt: Date.now(), updatedAt: Date.now() });
     }
     saveSettings();
     if (draft.recreateOf) {
@@ -987,7 +1051,10 @@ function scheduleScan(delay = 600) {
             updateUi();
             return;
         }
-        if (scanMode === 'local' && !aiScanning) scanCandidates();
+        if (!aiScanning) {
+            if (scanMode === 'ai') refreshAiCandidates();
+            else scanCandidates();
+        }
         updateUi();
     }, delay);
 }
@@ -1104,19 +1171,19 @@ function renderCreated() {
         const row = document.createElement('div');
         row.className = 'npcc-created-item';
         const label = document.createElement('span');
-        label.textContent = `🎭 ${entry.name} → ${entry.world}${status === 'missing' ? ' · 항목 삭제됨' : status === 'error' ? ' · 항목 확인 실패' : ''}`;
+        label.textContent = `🎭 ${entry.name} → ${entry.world}${status === 'missing' ? ' · 항목 삭제됨' : status === 'conflict' ? ' · 항목 번호가 다른 항목에 사용됨' : status === 'error' ? ' · 항목 확인 실패' : ''}`;
         const actions = document.createElement('div');
         actions.className = 'npcc-created-actions';
         const update = document.createElement('button');
         update.type = 'button';
         update.className = 'menu_button';
         update.textContent = '갱신';
-        update.disabled = generating || aiScanning || status === 'missing';
+        update.disabled = generating || aiScanning || status === 'missing' || status === 'conflict';
         update.addEventListener('click', () => {
             void generateFromUi(candidateForEntry(entry));
         });
         actions.append(update);
-        if (status === 'missing') {
+        if (status === 'missing' || status === 'conflict') {
             const recreate = document.createElement('button');
             recreate.type = 'button';
             recreate.className = 'menu_button';
@@ -1175,8 +1242,10 @@ export async function refreshCreatedEntryStatus() {
         const data = await worldApi.loadWorldInfo(targetBook);
         if (!data?.entries || typeof data.entries !== 'object') throw new Error('로어북을 읽지 못했습니다.');
         if (request !== createdStatusRequest || scope !== `${dismissScopeKey()}|${currentBookNameForUi()}`) return new Map();
-        createdEntryStatus = new Map(entries.map((entry) =>
-            [`${targetBook}:${entry.uid}`, data.entries[entry.uid] ? 'present' : 'missing']));
+        createdEntryStatus = new Map(entries.map((entry) => {
+            const saved = data.entries[entry.uid];
+            return [`${targetBook}:${entry.uid}`, !saved ? 'missing' : entryBelongsToTracked(saved, entry) ? 'present' : 'conflict'];
+        }));
     } catch (error) {
         if (request !== createdStatusRequest || scope !== `${dismissScopeKey()}|${currentBookNameForUi()}`) return new Map();
         console.warn(`${LOG_PREFIX} 데뷔한 NPC 항목 확인 실패`, error);
@@ -1587,6 +1656,7 @@ function registerEvents() {
         scanMode = 'local';
         lastCandidates = [];
         lastDetected = [];
+        aiScanSeeds = [];
         lastMessages = [];
         selectedCandidateNames.clear();
         queuedAiScan = false;
@@ -1650,6 +1720,7 @@ export function onDisable() {
     createdEntryStatus.clear();
     scanEpoch += 1;
     scanMode = 'local';
+    aiScanSeeds = [];
     pendingDraft = null;
     mainGenerationBusy = false;
     requestAbortController?.abort();
