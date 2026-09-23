@@ -1,6 +1,6 @@
 {
   "name": "npc-casting-room",
-  "version": "1.6.8",
+  "version": "1.6.9",
   "private": true,
   "type": "module",
   "scripts": {

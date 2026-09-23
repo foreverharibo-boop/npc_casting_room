@@ -25,7 +25,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.8';
+const EXTENSION_VERSION = '1.6.9';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -60,6 +60,9 @@ let scanEpoch = 0;
 let aiScanning = false;
 let queuedAiScan = false;
 let selectedCandidateNames = new Set();
+let createdEntryStatus = new Map();
+let createdStatusScope = '';
+let createdStatusRequest = 0;
 let mainGenerationBusy = false;
 let queuedCandidate = null;
 let requestAbortController = null;
@@ -299,7 +302,7 @@ export async function scanCandidatesWithAi() {
         if (queuedCandidate && !mainGenerationBusy && runtimeActive) {
             const candidate = queuedCandidate;
             queuedCandidate = null;
-            setTimeout(() => void generateFromUi(candidate), 400);
+            setTimeout(() => void generateFromUi(candidate, { recreateEntry: candidate.recreateEntry }), 400);
         }
     }
 }
@@ -673,7 +676,7 @@ async function promptForName(defaultName) {
     return defaultName;
 }
 
-export async function prepareNpcDraft(candidate) {
+export async function prepareNpcDraft(candidate, options = {}) {
     if (generating) return { ok: false, reason: '이미 다른 NPC를 생성하는 중이에요.' };
     const target = resolveTargetBook();
     if (!target) return { ok: false, reason: '로어북을 연결할 캐릭터나 채팅을 찾을 수 없어요.' };
@@ -695,22 +698,32 @@ export async function prepareNpcDraft(candidate) {
         const candidateNames = [candidate.name, ...(candidate.members ?? [])];
         const existing = tracked.find((item) => candidateNames.some((name) =>
             [item.name, ...(item.sourceNames ?? [])].some((saved) => saved.toLocaleLowerCase() === name.toLocaleLowerCase())));
+        const recreateEntry = options.recreateEntry;
+        if (recreateEntry && (!existing || existing.name !== recreateEntry.name || existing.uid !== recreateEntry.uid)) {
+            return { ok: false, reason: 'NPC 기록이 바뀌었어요. 항목 상태를 다시 확인해 주세요.' };
+        }
         let existingContent = '';
         let existingEntry = null;
         if (existing) {
             try {
                 const data = await worldApi.loadWorldInfo(target.name);
+                if (!data?.entries || typeof data.entries !== 'object') {
+                    throw new Error('로어북을 읽지 못했습니다.');
+                }
                 existingEntry = data?.entries?.[existing.uid];
-                if (!existingEntry || typeof existingEntry.content !== 'string') {
+                if (recreateEntry && existingEntry) {
+                    return { ok: false, reason: '항목이 이미 복구됐어요. 「갱신」을 사용해 주세요.' };
+                }
+                if (!recreateEntry && (!existingEntry || typeof existingEntry.content !== 'string')) {
                     throw new Error('기존 NPC 항목을 찾지 못했습니다.');
                 }
-                existingContent = existingEntry.content;
+                if (existingEntry) existingContent = existingEntry.content;
             } catch (error) {
                 throw new Error(`기존 NPC 항목을 읽지 못해 갱신을 중단했어요. ${error.message ?? ''}`);
             }
         }
 
-        if (existing) {
+        if (existing && !recreateEntry) {
             requestAbortController?.abort();
             requestAbortController = new AbortController();
             const response = await requestNpcProfile(
@@ -779,6 +792,7 @@ export async function prepareNpcDraft(candidate) {
                 sourceNames: candidateNames,
                 keys: buildEntryKeys(npc, candidateNames),
                 target,
+                ...(recreateEntry ? { recreateOf: { book: target.name, uid: existing.uid, name: existing.name } } : {}),
             },
         };
     } finally {
@@ -818,6 +832,16 @@ export async function saveNpcDraft(draft) {
             throw new Error(`기존 로어북 "${target.name}"을 읽지 못해 안전을 위해 저장을 중단했어요.${detail}`);
         }
         data = { entries: {} };
+    }
+
+    if (draft.recreateOf) {
+        const recovery = draft.recreateOf;
+        if (recovery.book !== target.name || !existing || existing.uid !== recovery.uid || existing.name !== recovery.name) {
+            throw new Error('NPC 기록이 바뀌었어요. 항목 상태를 다시 확인해 주세요.');
+        }
+        if (data.entries[recovery.uid]) {
+            throw new Error('삭제된 항목이 다시 나타났어요. 덮어쓰지 않았으니 「갱신」을 사용해 주세요.');
+        }
     }
 
     const uids = Object.keys(data.entries).map(Number).filter(Number.isFinite);
@@ -884,6 +908,9 @@ export async function saveNpcDraft(draft) {
         tracked.push({ name: draft.npcName, sourceNames, uid, world: target.name, createdAt: Date.now(), updatedAt: Date.now() });
     }
     saveSettings();
+    if (draft.recreateOf) {
+        createdEntryStatus.set(`${target.name}:${uid}`, 'present');
+    }
     return { ok: true, world: target.name, uid, name: draft.npcName, note: bindingNote };
 }
 
@@ -917,7 +944,7 @@ export function getPendingDraft() {
     return pendingDraft;
 }
 
-async function generateFromUi(candidate) {
+async function generateFromUi(candidate, options = {}) {
     try {
         if (aiScanning) {
             toastr.info('AI 스캔이 끝난 뒤 로어북 생성을 눌러 주세요.', '🎭캐스팅룸');
@@ -926,12 +953,12 @@ async function generateFromUi(candidate) {
         const settings = getSettings();
         const useSeparateProfile = Boolean(String(settings.profileId ?? '').trim());
         if (!useSeparateProfile && mainGenerationBusy) {
-            queuedCandidate = candidate;
+            queuedCandidate = { ...candidate, recreateEntry: options.recreateEntry };
             updateUi();
             toastr.info('메인 연결이 채팅을 생성하는 중이에요. 이번 생성이 끝나면 자동으로 초안을 만들게요.', '🎭캐스팅룸');
             return;
         }
-        const prepared = await prepareNpcDraft(candidate);
+        const prepared = await prepareNpcDraft(candidate, options);
         if (prepared.ok) {
             pendingDraft = prepared.draft;
             updateUi();
@@ -941,6 +968,7 @@ async function generateFromUi(candidate) {
         }
     } catch (error) {
         if (error?.name === 'AbortError') return;
+        if (/기존 NPC 항목을 읽지 못해/.test(String(error?.message))) void refreshCreatedEntryStatus();
         console.error(`${LOG_PREFIX} NPC 항목 생성 실패`, error);
         const hint = /API request failed|Response not OK/i.test(String(error?.message))
             ? ' — 선택한 연결 프로필에 API·모델·키가 전부 저장돼 있는지 확인하고, 안 되면 「현재 연결 사용」으로 테스트해 보세요.'
@@ -1069,29 +1097,49 @@ function renderCreated() {
     const entries = targetBook && Array.isArray(settings.createdEntries[targetBook])
         ? settings.createdEntries[targetBook].filter(Boolean)
         : [];
+    const scope = `${dismissScopeKey()}|${targetBook}`;
     list.replaceChildren();
     for (const entry of entries) {
+        const status = scope === createdStatusScope ? createdEntryStatus.get(`${targetBook}:${entry.uid}`) : undefined;
         const row = document.createElement('div');
         row.className = 'npcc-created-item';
         const label = document.createElement('span');
-        label.textContent = `🎭 ${entry.name} → ${entry.world}`;
+        label.textContent = `🎭 ${entry.name} → ${entry.world}${status === 'missing' ? ' · 항목 삭제됨' : status === 'error' ? ' · 항목 확인 실패' : ''}`;
+        const actions = document.createElement('div');
+        actions.className = 'npcc-created-actions';
         const update = document.createElement('button');
         update.type = 'button';
         update.className = 'menu_button';
         update.textContent = '갱신';
-        update.disabled = generating;
+        update.disabled = generating || aiScanning || status === 'missing';
         update.addEventListener('click', () => {
-            const sourceNames = Array.isArray(entry.sourceNames) && entry.sourceNames.length
-                ? entry.sourceNames : [entry.name];
-            const candidate = lastCandidates.find((item) => item.name.toLocaleLowerCase() === sourceNames[0].toLocaleLowerCase())
-                ?? { name: sourceNames[0], members: sourceNames.slice(1), count: 0, mentions: 0, dialogueLines: [], evidence: [], messageIds: [] };
-            void generateFromUi(candidate);
+            void generateFromUi(candidateForEntry(entry));
         });
-        row.append(label, update);
+        actions.append(update);
+        if (status === 'missing') {
+            const recreate = document.createElement('button');
+            recreate.type = 'button';
+            recreate.className = 'menu_button';
+            recreate.textContent = '다시 생성';
+            recreate.title = '현재 채팅으로 새 초안을 만듭니다. 삭제된 이전 본문은 복구되지 않습니다.';
+            recreate.disabled = generating || aiScanning;
+            recreate.addEventListener('click', () => void generateFromUi(candidateForEntry(entry), {
+                recreateEntry: { name: entry.name, uid: entry.uid },
+            }));
+            actions.append(recreate);
+        }
+        row.append(label, actions);
         list.append(row);
     }
     empty.hidden = entries.length !== 0;
     list.hidden = entries.length === 0;
+}
+
+function candidateForEntry(entry) {
+    const sourceNames = Array.isArray(entry.sourceNames) && entry.sourceNames.length
+        ? entry.sourceNames : [entry.name];
+    return lastCandidates.find((item) => item.name.toLocaleLowerCase() === sourceNames[0].toLocaleLowerCase())
+        ?? { name: sourceNames[0], members: sourceNames.slice(1), count: 0, mentions: 0, dialogueLines: [], evidence: [], messageIds: [] };
 }
 
 function currentBookNameForUi() {
@@ -1108,6 +1156,34 @@ function currentBookNameForUi() {
     return typeof primary === 'string' && primary.trim()
         ? primary.trim()
         : sanitizeBookName(`캐스팅룸-${character.name ?? 'character'}`);
+}
+
+export async function refreshCreatedEntryStatus() {
+    const targetBook = currentBookNameForUi();
+    const scope = `${dismissScopeKey()}|${targetBook}`;
+    const request = ++createdStatusRequest;
+    createdStatusScope = scope;
+    createdEntryStatus = new Map();
+    const entries = targetBook ? getSettings().createdEntries[targetBook] : null;
+    if (!Array.isArray(entries) || !entries.length) {
+        updateUi();
+        return createdEntryStatus;
+    }
+    try {
+        const worldApi = await getWorldApi();
+        if (!worldApi) throw new Error('로어북 API를 사용할 수 없습니다.');
+        const data = await worldApi.loadWorldInfo(targetBook);
+        if (!data?.entries || typeof data.entries !== 'object') throw new Error('로어북을 읽지 못했습니다.');
+        if (request !== createdStatusRequest || scope !== `${dismissScopeKey()}|${currentBookNameForUi()}`) return new Map();
+        createdEntryStatus = new Map(entries.map((entry) =>
+            [`${targetBook}:${entry.uid}`, data.entries[entry.uid] ? 'present' : 'missing']));
+    } catch (error) {
+        if (request !== createdStatusRequest || scope !== `${dismissScopeKey()}|${currentBookNameForUi()}`) return new Map();
+        console.warn(`${LOG_PREFIX} 데뷔한 NPC 항목 확인 실패`, error);
+        createdEntryStatus = new Map(entries.map((entry) => [`${targetBook}:${entry.uid}`, 'error']));
+    }
+    updateUi();
+    return createdEntryStatus;
 }
 
 function populateProfiles() {
@@ -1184,7 +1260,7 @@ function updateUi() {
     if (draftBox) {
         draftBox.hidden = !pendingDraft;
         if (pendingDraft) {
-            document.getElementById('npcc-draft-meta').textContent = `"${pendingDraft.npcName}" → 로어북 "${pendingDraft.target.name}" · 키워드: ${pendingDraft.keys.join(', ')}`;
+            document.getElementById('npcc-draft-meta').textContent = `${pendingDraft.recreateOf ? '다시 생성 · 삭제된 이전 본문은 복구되지 않아요. · ' : ''}"${pendingDraft.npcName}" → 로어북 "${pendingDraft.target.name}" · 키워드: ${pendingDraft.keys.join(', ')}`;
             document.getElementById('npcc-draft-text').textContent = pendingDraft.content;
             const cleanButton = document.getElementById('npcc-draft-clean');
             if (cleanButton) cleanButton.disabled = !pendingDraft.content.includes('(추정)');
@@ -1220,12 +1296,22 @@ function bindSetting(id, key, parser = (value) => value, afterChange = null) {
         if (afterChange) afterChange(settings);
         scanCandidates();
         updateUi();
+        if (key === 'lorebookTarget') void refreshCreatedEntryStatus();
     });
 }
 
 function bindUi() {
     document.querySelectorAll('#npcc-settings [data-npcc-tab]').forEach((button) => {
-        button.addEventListener('click', () => setTab(button.dataset.npccTab));
+        button.addEventListener('click', () => {
+            setTab(button.dataset.npccTab);
+            if (button.dataset.npccTab === 'candidates') void refreshCreatedEntryStatus();
+        });
+    });
+    document.querySelector('#npcc-settings .npcc-drawer-header')?.addEventListener('click', () => {
+        void refreshCreatedEntryStatus();
+    });
+    document.getElementById('npcc-check-created')?.addEventListener('click', () => {
+        void refreshCreatedEntryStatus();
     });
 
     bindSetting('npcc-window-size', 'windowSize', (value) => {
@@ -1286,10 +1372,12 @@ function bindUi() {
         try {
             const result = await saveNpcDraft(pendingDraft);
             if (result.ok) {
+                const recreated = Boolean(pendingDraft.recreateOf);
                 pendingDraft = null;
                 scanCandidates();
                 updateUi();
-                toastr.success(`"${result.name}" 항목을 로어북 "${result.world}"에 저장했어요.${result.note ?? ''}`, '🎭캐스팅룸');
+                void refreshCreatedEntryStatus();
+                toastr.success(`"${result.name}" 항목을 로어북 "${result.world}"에 ${recreated ? '다시 생성했어요' : '저장했어요'}.${result.note ?? ''}`, '🎭캐스팅룸');
             } else if (result.reason) {
                 toastr.error(result.reason, '🎭캐스팅룸');
             }
@@ -1360,6 +1448,7 @@ async function initializeUi() {
     populateProfiles();
     scanCandidates();
     updateUi();
+    void refreshCreatedEntryStatus();
 }
 
 async function ensureStyles() {
@@ -1432,6 +1521,7 @@ function openWandDialog() {
     updateUi();
     wandDialog.showModal();
     bringToastsIntoWandDialog();
+    void refreshCreatedEntryStatus();
 }
 
 function registerWandMenu() {
@@ -1484,12 +1574,15 @@ function registerEvents() {
         const candidate = queuedCandidate;
         queuedCandidate = null;
         setTimeout(() => {
-            if (runtimeActive && getSettings().enabled) void generateFromUi(candidate);
+            if (runtimeActive && getSettings().enabled) void generateFromUi(candidate, { recreateEntry: candidate.recreateEntry });
         }, 400);
     };
     listen('GENERATION_ENDED', finishMainGeneration);
     listen('GENERATION_STOPPED', finishMainGeneration);
     listen('CHAT_CHANGED', () => {
+        createdStatusRequest += 1;
+        createdStatusScope = '';
+        createdEntryStatus.clear();
         scanEpoch += 1;
         scanMode = 'local';
         lastCandidates = [];
@@ -1503,6 +1596,7 @@ function registerEvents() {
         requestAbortController?.abort();
         populateProfiles();
         scheduleScan(200);
+        void refreshCreatedEntryStatus();
     });
     listen('CONNECTION_PROFILE_LOADED', populateProfiles);
     eventsRegistered = true;
@@ -1533,6 +1627,7 @@ export function onEnable() {
     registerEvents();
     registerWandMenu();
     scheduleScan(100);
+    void refreshCreatedEntryStatus();
 }
 
 export function onDisable() {
@@ -1550,6 +1645,9 @@ export function onDisable() {
     clearTimeout(scanTimer);
     queuedCandidate = null;
     queuedAiScan = false;
+    createdStatusRequest += 1;
+    createdStatusScope = '';
+    createdEntryStatus.clear();
     scanEpoch += 1;
     scanMode = 'local';
     pendingDraft = null;

@@ -233,6 +233,69 @@ test('갱신 초안을 만든 뒤 기존 항목을 수정했다면 이전 내용
     module.onDisable();
 });
 
+test('삭제된 NPC 항목만 다시 생성하고 복구된 항목이나 다른 항목은 덮어쓰지 않는다', async () => {
+    let book = { entries: { 1: { uid: 1, key: ['다른 인물'], content: '다른 인물의 원본.' } } };
+    let calls = 0;
+    let writes = 0;
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { createdEntries: {
+            기존월드: [{ name: '민수', sourceNames: ['민수'], uid: 0, world: '기존월드' }],
+        } } },
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존월드' } } }],
+        generateRaw: async () => { calls += 1; return PROFILE_JSON; },
+        loadWorldInfo: async () => structuredClone(book),
+        saveWorldInfo: async (name, data) => { writes += 1; book = structuredClone(data); },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?recreate=${Date.now()}`);
+    module.scanCandidates();
+    assert.equal((await module.refreshCreatedEntryStatus()).get('기존월드:0'), 'missing');
+    await assert.rejects(() => module.prepareNpcDraft({ name: '민수' }), /기존 NPC 항목을 읽지 못해/);
+    assert.equal(calls, 0);
+
+    const prepared = await module.prepareNpcDraft({ name: '민수' }, { recreateEntry: { name: '민수', uid: 0 } });
+    assert.equal(prepared.ok, true);
+    assert.deepEqual(prepared.draft.recreateOf, { book: '기존월드', uid: 0, name: '민수' });
+    assert.equal(writes, 0);
+    book.entries[0] = { uid: 0, key: ['복구'], content: '돌아온 원본.' };
+    await assert.rejects(() => module.saveNpcDraft(prepared.draft), /덮어쓰지 않았으니/);
+    assert.equal(writes, 0);
+    assert.equal(book.entries[0].content, '돌아온 원본.');
+
+    delete book.entries[0];
+    const saved = await module.saveNpcDraft(prepared.draft);
+    assert.equal(saved.ok, true);
+    assert.equal(saved.uid, 2);
+    assert.equal(book.entries[1].content, '다른 인물의 원본.');
+    assert.deepEqual(book.entries[2].key, ['민수', '미스터 민']);
+    assert.equal(context.extensionSettings.npcCastingRoom.createdEntries['기존월드'].length, 1);
+    assert.equal(context.extensionSettings.npcCastingRoom.createdEntries['기존월드'][0].uid, 2);
+    assert.equal((await module.refreshCreatedEntryStatus()).get('기존월드:2'), 'present');
+    module.onDisable();
+});
+
+test('로어북 자체를 읽지 못하면 삭제로 간주하지 않고 다시 생성을 막는다', async () => {
+    let calls = 0;
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { createdEntries: {
+            기존월드: [{ name: '민수', sourceNames: ['민수'], uid: 0, world: '기존월드' }],
+        } } },
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존월드' } } }],
+        loadWorldInfo: async () => null,
+        saveWorldInfo: async () => { throw new Error('저장하면 안 됩니다.'); },
+        generateRaw: async () => { calls += 1; return PROFILE_JSON; },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?missing-book=${Date.now()}`);
+    module.scanCandidates();
+    assert.equal((await module.refreshCreatedEntryStatus()).get('기존월드:0'), 'error');
+    await assert.rejects(() => module.prepareNpcDraft({ name: '민수' }, { recreateEntry: { name: '민수', uid: 0 } }), /로어북을 읽지 못했습니다/);
+    assert.equal(calls, 0);
+    module.onDisable();
+});
+
 test('카드에 이미 로어북이 있으면 그 로어북에 항목을 추가하고 카드는 건드리지 않는다', async () => {
     const saved = [];
     const fieldWrites = [];

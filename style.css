@@ -272,6 +272,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   padding: 6px 0;
   border-bottom: 1px solid color-mix(in srgb, currentColor 13%, transparent);
 }
@@ -279,6 +280,15 @@
 #npcc-settings .npcc-created-item > span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+#npcc-settings .npcc-created-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 #npcc-settings .npcc-empty {
