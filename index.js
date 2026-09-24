@@ -26,7 +26,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.13';
+const EXTENSION_VERSION = '1.6.14';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -1232,14 +1232,14 @@ function renderCreated() {
         const forget = document.createElement('button');
         forget.type = 'button';
         forget.className = 'menu_button';
-        forget.textContent = '삭제';
-        forget.title = '캐스팅룸 추적 목록에서만 삭제합니다. 로어북 항목은 삭제하지 않습니다.';
+        forget.textContent = '퇴출';
+        forget.title = '캐스팅룸 관리 목록에서만 퇴출합니다. 로어북 항목은 그대로 둡니다.';
         forget.disabled = generating || aiScanning;
         forget.addEventListener('click', () => {
-            const confirmed = globalThis.confirm?.(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 삭제할까요?\n로어북 항목은 삭제하지 않습니다. 다시 스캔하면 후보로 나타날 수 있어요.`);
+            const confirmed = globalThis.confirm?.(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 퇴출할까요?\n로어북 항목은 그대로 둡니다. 다시 스캔하면 후보로 나타날 수 있어요.`);
             if (!confirmed) return;
             if (forgetCreatedNpc(entry)) {
-                toastr.success(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 삭제했어요. 로어북 항목은 그대로예요.`, '🎭캐스팅룸');
+                toastr.success(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 퇴출했어요. 로어북 항목은 그대로예요.`, '🎭캐스팅룸');
             } else {
                 toastr.info('NPC 기록이 이미 바뀌었어요. 목록을 다시 확인해 주세요.', '🎭캐스팅룸');
             }
