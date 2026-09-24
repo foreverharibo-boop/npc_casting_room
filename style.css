@@ -368,6 +368,21 @@
   margin: 0;
 }
 
+#npcc-settings .npcc-field.npcc-checkbox-field {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+#npcc-settings .npcc-checkbox-field input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 1em;
+  height: 1em;
+  margin: 0;
+}
+
 #npcc-settings .npcc-field-note {
   margin: 4px 0 8px;
 }
