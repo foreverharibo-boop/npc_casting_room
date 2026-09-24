@@ -381,6 +381,7 @@
   width: 1em;
   height: 1em;
   margin: 0;
+  accent-color: var(--SmartThemeQuoteColor, currentColor);
 }
 
 #npcc-settings .npcc-field-note {
