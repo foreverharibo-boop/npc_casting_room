@@ -1,3 +1,4 @@
+import { describeRequestError, isVertexProfile, requestVertexProfile } from './vertex-request.js';
 import {
     buildEntryKeys,
     buildLorebookContent,
@@ -26,7 +27,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.17';
+const EXTENSION_VERSION = '1.6.18';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -559,6 +560,12 @@ async function requestNpcProfile(prompt, signal) {
         // Refresh opts only this extension/profile into the provider's active key.
         // A later profile edit invalidates the override and restores its saved key.
         const useActiveKey = profile && settings.activeKeyProfiles?.[profileId] === connectionKeySignature(profile);
+        if (isVertexProfile(context, profile)) {
+            if (context.extensionSettings.disabledExtensions?.includes('connection-manager')) {
+                throw new Error('Connection Manager 확장이 꺼져 있어요.');
+            }
+            return requestVertexProfile(context, profile, prompt, maxTokens, signal, useActiveKey);
+        }
         const result = await service.sendRequest(profileId, prompt, maxTokens, {
             stream: false,
             signal,
@@ -1045,10 +1052,7 @@ async function generateFromUi(candidate, options = {}) {
         if (error?.name === 'AbortError') return;
         if (/기존 NPC 항목을 읽지 못해/.test(String(error?.message))) void refreshCreatedEntryStatus();
         console.error(`${LOG_PREFIX} NPC 항목 생성 실패`, error);
-        const hint = /API request failed|Response not OK/i.test(String(error?.message))
-            ? ' — API 키를 바꿨다면 새 키를 저장·선택한 뒤 연결 옆 「새로고침」을 눌러 주세요. 계속 실패하면 연결 프로필의 API·모델·키를 확인해 주세요.'
-            : '';
-        npccToast('error', `생성 실패: ${error?.message ?? error}${hint}`, '🎭캐스팅룸');
+        npccToast('error', `생성 실패: ${describeRequestError(error)}`, '🎭캐스팅룸');
     }
 }
 
@@ -1567,7 +1571,7 @@ function bindUi() {
         } catch (error) {
             if (error?.name === 'AbortError') return;
             console.error(`${LOG_PREFIX} AI 스캔 실패`, error);
-            npccToast('error', `AI 스캔 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
+            npccToast('error', `AI 스캔 실패: ${describeRequestError(error)}`, '🎭캐스팅룸');
         }
     });
     document.getElementById('npcc-select-all')?.addEventListener('change', (event) => {
@@ -1707,6 +1711,8 @@ function npccToast(level, message, title) {
         containerId: 'npcc-toast-container',
         target,
         positionClass: 'toast-top-right',
+        escapeHtml: true,
+        ...(level === 'error' ? { timeOut: 15000, extendedTimeOut: 10000, closeButton: true } : {}),
     });
 }
 

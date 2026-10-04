@@ -1001,3 +1001,36 @@ test('연결 새로고침은 원본 프로필을 바꾸거나 AI를 호출하지
     assert.equal(rawCalls, 0);
     module.onDisable();
 });
+
+test('버텍스 NPC 스캔은 다른 메인 API 설정을 바꾸지 않고 버텍스 전용 경로로 요청한다', async () => {
+    const originalFetch = globalThis.fetch;
+    const profile = { id: 'vertex', api: 'vertexai', model: 'test-gemini' };
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { profileId: 'vertex' } },
+        chatCompletionSettings: { chat_completion_source: 'openrouter', vertexai_auth_mode: 'express', vertexai_region: 'global', vertexai_express_project_id: 'test-project' },
+        getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+        ConnectionManagerRequestService: {
+            getProfile: () => profile,
+            sendRequest: async () => { throw new Error('must not use generic profile request'); },
+        },
+        ChatCompletionService: { presetToGeneratePayload: async (preset, overrides, payload) => payload },
+    });
+    const before = structuredClone(context.chatCompletionSettings);
+    globalThis.SillyTavern = { getContext: () => context };
+    const module = await import(`../index.js?vertex-routing=${Date.now()}`);
+    try {
+        globalThis.fetch = async (url, options) => {
+            const payload = JSON.parse(options.body);
+            assert.equal(payload.chat_completion_source, 'vertexai');
+            assert.equal(payload.vertexai_auth_mode, 'express');
+            assert.equal(payload.vertexai_express_project_id, 'test-project');
+            assert.equal(payload.model, 'test-gemini');
+            return new Response(JSON.stringify({ choices: [{ message: { content: '{"npcs":[]}' } }] }));
+        };
+        assert.equal((await module.scanCandidatesWithAi()).ok, true);
+        assert.deepEqual(context.chatCompletionSettings, before);
+    } finally {
+        globalThis.fetch = originalFetch;
+        module.onDisable();
+    }
+});

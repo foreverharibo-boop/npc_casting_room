@@ -1,10 +1,10 @@
 {
   "name": "npc-casting-room",
-  "version": "1.6.17",
+  "version": "1.6.18",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check index.js && node --check scout.js"
+    "check": "node --check index.js && node --check scout.js && node --check vertex-request.js"
   }
 }
