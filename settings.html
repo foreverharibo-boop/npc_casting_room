@@ -102,12 +102,16 @@
           </select>
         </label>
 
-        <label class="npcc-field" for="npcc-profile">
-          <span>AI 스캔·프로필 생성 연결</span>
-          <select id="npcc-profile" class="text_pole">
-            <option value="">현재 연결 사용</option>
-          </select>
-        </label>
+        <div class="npcc-field">
+          <label for="npcc-profile">AI 스캔·프로필 생성 연결</label>
+          <div class="npcc-profile-controls">
+            <select id="npcc-profile" class="text_pole">
+              <option value="">현재 연결 사용</option>
+            </select>
+            <button id="npcc-profile-refresh" class="menu_button" type="button" title="연결 목록을 갱신하고 선택한 API의 현재 활성 키 사용">새로고침</button>
+          </div>
+        </div>
+        <small class="npcc-field-note">API 키를 바꿨다면 실리태번에서 새 키를 저장·선택한 뒤 새로고침을 눌러 주세요. 선택한 연결은 캐스팅룸에서 해당 API의 현재 활성 키를 사용해요.</small>
 
         <label class="npcc-field" for="npcc-entry-format">
           <span>항목 양식</span>

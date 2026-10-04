@@ -26,7 +26,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.16';
+const EXTENSION_VERSION = '1.6.17';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -38,6 +38,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     minMessages: 2,
     lorebookTarget: 'character',
     profileId: '',
+    activeKeyProfiles: {},
     maxTokens: 1200,
     entryFormat: 'sheet',
     customFormatPrompt: '',
@@ -71,8 +72,6 @@ let requestAbortController = null;
 let pendingDraft = null;
 let wandDialog = null;
 let settingsHome = null;
-let toastHome = null;
-let dialogToastContainer = null;
 const registeredEventHandlers = [];
 
 function getContext() {
@@ -556,11 +555,15 @@ async function requestNpcProfile(prompt, signal) {
         if (!service || typeof service.sendRequest !== 'function') {
             throw new Error('Connection Profiles 서비스를 사용할 수 없습니다.');
         }
+        const profile = getConnectionProfile(service, profileId);
+        // Refresh opts only this extension/profile into the provider's active key.
+        // A later profile edit invalidates the override and restores its saved key.
+        const useActiveKey = profile && settings.activeKeyProfiles?.[profileId] === connectionKeySignature(profile);
         const result = await service.sendRequest(profileId, prompt, maxTokens, {
             stream: false,
             signal,
             extractData: true,
-        });
+        }, useActiveKey ? { secret_id: undefined } : {});
         if (typeof result === 'string') return result;
         if (result && typeof result.content === 'string') return result.content;
         throw new Error('연결 프로필이 텍스트를 반환하지 않았습니다.');
@@ -1019,7 +1022,7 @@ export function getPendingDraft() {
 async function generateFromUi(candidate, options = {}) {
     try {
         if (aiScanning) {
-            toastr.info('AI 스캔이 끝난 뒤 로어북 생성을 눌러 주세요.', '🎭캐스팅룸');
+            npccToast('info', 'AI 스캔이 끝난 뒤 로어북 생성을 눌러 주세요.', '🎭캐스팅룸');
             return;
         }
         const settings = getSettings();
@@ -1027,25 +1030,25 @@ async function generateFromUi(candidate, options = {}) {
         if (!useSeparateProfile && mainGenerationBusy) {
             queuedCandidate = { ...candidate, recreateEntry: options.recreateEntry };
             updateUi();
-            toastr.info('메인 연결이 채팅을 생성하는 중이에요. 이번 생성이 끝나면 자동으로 초안을 만들게요.', '🎭캐스팅룸');
+            npccToast('info', '메인 연결이 채팅을 생성하는 중이에요. 이번 생성이 끝나면 자동으로 초안을 만들게요.', '🎭캐스팅룸');
             return;
         }
         const prepared = await prepareNpcDraft(candidate, options);
         if (prepared.ok) {
             pendingDraft = prepared.draft;
             updateUi();
-            toastr.success(`"${prepared.draft.npcName}" 초안이 준비됐어요. 내용을 확인하고 저장해 주세요.`, '🎭캐스팅룸');
+            npccToast('success', `"${prepared.draft.npcName}" 초안이 준비됐어요. 내용을 확인하고 저장해 주세요.`, '🎭캐스팅룸');
         } else if (prepared.reason) {
-            toastr.info(prepared.reason, '🎭캐스팅룸');
+            npccToast('info', prepared.reason, '🎭캐스팅룸');
         }
     } catch (error) {
         if (error?.name === 'AbortError') return;
         if (/기존 NPC 항목을 읽지 못해/.test(String(error?.message))) void refreshCreatedEntryStatus();
         console.error(`${LOG_PREFIX} NPC 항목 생성 실패`, error);
         const hint = /API request failed|Response not OK/i.test(String(error?.message))
-            ? ' — 선택한 연결 프로필에 API·모델·키가 전부 저장돼 있는지 확인하고, 안 되면 「현재 연결 사용」으로 테스트해 보세요.'
+            ? ' — API 키를 바꿨다면 새 키를 저장·선택한 뒤 연결 옆 「새로고침」을 눌러 주세요. 계속 실패하면 연결 프로필의 API·모델·키를 확인해 주세요.'
             : '';
-        toastr.error(`생성 실패: ${error?.message ?? error}${hint}`, '🎭캐스팅룸');
+        npccToast('error', `생성 실패: ${error?.message ?? error}${hint}`, '🎭캐스팅룸');
     }
 }
 
@@ -1239,9 +1242,9 @@ function renderCreated() {
             const confirmed = globalThis.confirm?.(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 퇴출할까요?\n로어북 항목은 그대로 둡니다. 다시 스캔하면 후보로 나타날 수 있어요.`);
             if (!confirmed) return;
             if (forgetCreatedNpc(entry)) {
-                toastr.success(`"${entry.name}"을(를) 데뷔한 NPC 목록에서 퇴출했어요. 로어북 항목은 그대로예요.`, '🎭캐스팅룸');
+                npccToast('success', `"${entry.name}"을(를) 데뷔한 NPC 목록에서 퇴출했어요. 로어북 항목은 그대로예요.`, '🎭캐스팅룸');
             } else {
-                toastr.info('NPC 기록이 이미 바뀌었어요. 목록을 다시 확인해 주세요.', '🎭캐스팅룸');
+                npccToast('info', 'NPC 기록이 이미 바뀌었어요. 목록을 다시 확인해 주세요.', '🎭캐스팅룸');
             }
         });
         actions.append(forget);
@@ -1303,6 +1306,34 @@ export async function refreshCreatedEntryStatus() {
     }
     updateUi();
     return createdEntryStatus;
+}
+
+function getConnectionProfile(service, profileId) {
+    if (typeof service?.getProfile === 'function') return service.getProfile(profileId);
+    return service?.getSupportedProfiles?.().find((profile) => String(profile.id) === profileId);
+}
+
+function connectionKeySignature(profile) {
+    // These are connection identifiers, never the API key value.
+    return JSON.stringify([profile.api ?? '', profile['api-url'] ?? '', profile['secret-id'] ?? '']);
+}
+
+export function refreshConnectionProfiles() {
+    const settings = getSettings();
+    const profileId = String(settings.profileId ?? '').trim();
+    const service = getContext().ConnectionManagerRequestService;
+    // Read the live profile list; do not reload/switch the main connection.
+    if (profileId) {
+        const profile = getConnectionProfile(service, profileId);
+        if (!profile) throw new Error('선택한 연결 프로필을 찾을 수 없어요. 연결 프로필을 다시 선택해 주세요.');
+        settings.activeKeyProfiles = {
+            ...(settings.activeKeyProfiles && typeof settings.activeKeyProfiles === 'object' ? settings.activeKeyProfiles : {}),
+            [profileId]: connectionKeySignature(profile),
+        };
+        saveSettings();
+    }
+    populateProfiles();
+    return profileId;
 }
 
 function populateProfiles() {
@@ -1499,6 +1530,16 @@ function bindUi() {
     bindSetting('npcc-min-messages', 'minMessages', Number);
     bindSetting('npcc-target', 'lorebookTarget', String);
     bindSetting('npcc-profile', 'profileId', String);
+    document.getElementById('npcc-profile-refresh')?.addEventListener('click', () => {
+        try {
+            const profileId = refreshConnectionProfiles();
+            npccToast('success', profileId
+                ? '연결을 새로고침했어요. 다음 요청부터 해당 API의 현재 활성 키를 사용해요.'
+                : '연결 목록을 새로고침했어요. 현재 연결의 최신 설정으로 요청해요.', '🎭캐스팅룸');
+        } catch (error) {
+            npccToast('error', `연결 새로고침 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
+        }
+    });
     bindSetting('npcc-entry-format', 'entryFormat', String);
     document.getElementById('npcc-custom-format-prompt')?.addEventListener('input', (event) => {
         getSettings().customFormatPrompt = event.currentTarget.value;
@@ -1516,17 +1557,17 @@ function bindUi() {
     document.getElementById('npcc-rescan')?.addEventListener('click', () => {
         scanCandidates();
         updateUi();
-        toastr.success('최근 답변을 다시 스캔했어요.', '🎭캐스팅룸');
+        npccToast('success', '최근 답변을 다시 스캔했어요.', '🎭캐스팅룸');
     });
     document.getElementById('npcc-ai-scan')?.addEventListener('click', async () => {
         try {
             const result = await scanCandidatesWithAi();
-            if (result.ok) toastr.success(`AI 스캔 완료: 후보 ${result.count}명`, '🎭캐스팅룸');
-            else if (result.reason) toastr.info(result.reason, '🎭캐스팅룸');
+            if (result.ok) npccToast('success', `AI 스캔 완료: 후보 ${result.count}명`, '🎭캐스팅룸');
+            else if (result.reason) npccToast('info', result.reason, '🎭캐스팅룸');
         } catch (error) {
             if (error?.name === 'AbortError') return;
             console.error(`${LOG_PREFIX} AI 스캔 실패`, error);
-            toastr.error(`AI 스캔 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
+            npccToast('error', `AI 스캔 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
         }
     });
     document.getElementById('npcc-select-all')?.addEventListener('change', (event) => {
@@ -1541,7 +1582,7 @@ function bindUi() {
         const names = lastCandidates.filter((candidate) => selectedCandidateNames.has(candidate.name)).map((candidate) => candidate.name);
         if (!names.length) return;
         const count = ignoreCandidates(names);
-        toastr.success(`후보 ${count}명을 무시 목록에 넣었어요.`, '🎭캐스팅룸');
+        npccToast('success', `후보 ${count}명을 무시 목록에 넣었어요.`, '🎭캐스팅룸');
     });
     document.getElementById('npcc-draft-save')?.addEventListener('click', async () => {
         if (!pendingDraft) return;
@@ -1553,25 +1594,25 @@ function bindUi() {
                 scanCandidates();
                 updateUi();
                 void refreshCreatedEntryStatus();
-                toastr.success(`"${result.name}" 항목을 로어북 "${result.world}"에 ${recreated ? '다시 생성했어요' : '저장했어요'}.${result.note ?? ''}`, '🎭캐스팅룸');
+                npccToast('success', `"${result.name}" 항목을 로어북 "${result.world}"에 ${recreated ? '다시 생성했어요' : '저장했어요'}.${result.note ?? ''}`, '🎭캐스팅룸');
             } else if (result.reason) {
-                toastr.error(result.reason, '🎭캐스팅룸');
+                npccToast('error', result.reason, '🎭캐스팅룸');
             }
         } catch (error) {
             console.error(`${LOG_PREFIX} 초안 저장 실패`, error);
-            toastr.error(`저장 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
+            npccToast('error', `저장 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
         }
     });
     document.getElementById('npcc-draft-clean')?.addEventListener('click', () => {
         if (!pendingDraft || pendingDraft.updateSuggestions) return;
         pendingDraft.content = removeInferenceMarkers(pendingDraft.content);
         updateUi();
-        toastr.success('"(추정)" 표시를 모두 지웠어요. 내용은 그대로예요.', '🎭캐스팅룸');
+        npccToast('success', '"(추정)" 표시를 모두 지웠어요. 내용은 그대로예요.', '🎭캐스팅룸');
     });
     document.getElementById('npcc-draft-cancel')?.addEventListener('click', () => {
         pendingDraft = null;
         updateUi();
-        toastr.info('생성을 취소했어요. 로어북에는 아무것도 저장되지 않았어요.', '🎭캐스팅룸');
+        npccToast('info', '생성을 취소했어요. 로어북에는 아무것도 저장되지 않았어요.', '🎭캐스팅룸');
     });
 
     document.getElementById('npcc-merge-selected')?.addEventListener('click', async () => {
@@ -1579,19 +1620,19 @@ function bindUi() {
             .map((element) => element.dataset.npccName)
             .filter(Boolean);
         if (checked.length < 2) {
-            toastr.info('합칠 후보를 2개 이상 체크해 주세요.', '🎭캐스팅룸');
+            npccToast('info', '합칠 후보를 2개 이상 체크해 주세요.', '🎭캐스팅룸');
             return;
         }
         const defaultName = checked.join(' ');
         const name = await promptForName(defaultName);
         if (name === null) return;
         if (!mergeCandidateGroup(checked, name)) {
-            toastr.error('후보를 합치지 못했어요.', '🎭캐스팅룸');
+            npccToast('error', '후보를 합치지 못했어요.', '🎭캐스팅룸');
             return;
         }
         applyDetectedCandidates();
         updateUi();
-        toastr.success(`"${name || defaultName}"(으)로 합쳤어요. 두 이름 모두 로어북 키워드에 들어가요.`, '🎭캐스팅룸');
+        npccToast('success', `"${name || defaultName}"(으)로 합쳤어요. 두 이름 모두 로어북 키워드에 들어가요.`, '🎭캐스팅룸');
     });
     document.getElementById('npcc-clear-dismissed')?.addEventListener('click', () => {
         const settings = getSettings();
@@ -1599,7 +1640,7 @@ function bindUi() {
         saveSettings();
         scanCandidates();
         updateUi();
-        toastr.success('무시 목록을 초기화했어요.', '🎭캐스팅룸');
+        npccToast('success', '무시 목록을 초기화했어요.', '🎭캐스팅룸');
     });
 }
 
@@ -1643,30 +1684,30 @@ async function ensureStyles() {
 }
 
 function bringToastsIntoWandDialog() {
-    if (!wandDialog || dialogToastContainer) return;
-    // showModal() puts the dialog in the browser's top layer. A toast in body
-    // cannot appear above it, regardless of z-index, so keep the normal
-    // Toastr container inside the dialog until it closes.
-    const id = globalThis.toastr?.options?.containerId || 'toast-container';
-    const container = document.getElementById(id) ?? document.createElement('div');
-    if (!container.id) {
-        container.id = id;
-        container.className = globalThis.toastr?.options?.positionClass || 'toast-top-right';
-    }
-    toastHome = document.createComment('NPC 캐스팅룸 토스트 자리');
-    if (container.isConnected) container.before(toastHome);
-    else document.body.append(toastHome);
-    wandDialog.append(container);
-    dialogToastContainer = container;
+    const container = document.getElementById('npcc-toast-container');
+    if (container && wandDialog?.open) wandDialog.append(container);
 }
 
 function restoreToasts() {
-    if (dialogToastContainer) {
-        if (toastHome?.isConnected) toastHome.replaceWith(dialogToastContainer);
-        else document.body.append(dialogToastContainer);
-    }
-    toastHome = null;
-    dialogToastContainer = null;
+    const container = document.getElementById('npcc-toast-container');
+    if (container) document.body.append(container);
+}
+
+function npccToast(level, message, title) {
+    const api = globalThis.toastr;
+    if (typeof api?.[level] !== 'function') return;
+    if (typeof document === 'undefined') return api[level](message, title);
+    // Toastr removes empty containers. Set the target on EVERY notification so
+    // a recreated container stays in the modal's top layer too. Never move or
+    // reconfigure the shared toast container used by ST and other extensions.
+    const target = wandDialog?.open ? wandDialog : document.body;
+    const container = document.getElementById('npcc-toast-container');
+    if (container && container.parentNode !== target) target.append(container);
+    return api[level](message, title, {
+        containerId: 'npcc-toast-container',
+        target,
+        positionClass: 'toast-top-right',
+    });
 }
 
 function openWandDialog() {
@@ -1694,6 +1735,7 @@ function openWandDialog() {
     settingsHome = document.createComment('NPC 캐스팅룸 설정 자리');
     settings.replaceWith(settingsHome);
     wandDialog.append(settings);
+    populateProfiles();
     updateUi();
     wandDialog.showModal();
     bringToastsIntoWandDialog();
@@ -1847,7 +1889,7 @@ if (events.APP_READY) {
         if (!runtimeActive) return;
         void initialize().catch((error) => {
             console.error(`${LOG_PREFIX} 초기화 실패`, error);
-            toastr.error(`초기화 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
+            npccToast('error', `초기화 실패: ${error?.message ?? error}`, '🎭캐스팅룸');
         });
     });
 } else {

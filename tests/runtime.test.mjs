@@ -957,3 +957,47 @@ test('무시한 이름은 후보 목록에서 사라지고 무시 목록은 카�
     assert.equal(module.scanCandidates().some((item) => item.name === '민수'), false);
     module.onDisable();
 });
+
+test('연결 새로고침은 원본 프로필을 바꾸거나 AI를 호출하지 않고 이 연결만 활성 키로 요청한다', async () => {
+    const profiles = [
+        { id: 'first', api: 'google', 'secret-id': 'old-key-id' },
+        { id: 'second', api: 'openai', 'secret-id': 'other-key-id' },
+    ];
+    const originalProfiles = structuredClone(profiles);
+    const payloads = [];
+    let rawCalls = 0;
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { profileId: 'first' } },
+        ConnectionManagerRequestService: {
+            getProfile: (id) => profiles.find((profile) => profile.id === id),
+            sendRequest: async (id, prompt, tokens, options, override) => {
+                payloads.push({ id, payload: { secret_id: profiles.find((p) => p.id === id)['secret-id'], ...override } });
+                return '{"npcs":[]}';
+            },
+        },
+        generateRaw: async () => { rawCalls++; return '{"npcs":[]}'; },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    const module = await import(`../index.js?key-refresh=${Date.now()}`);
+    await module.scanCandidatesWithAi();
+    assert.equal(payloads.at(-1).payload.secret_id, 'old-key-id');
+    assert.equal(module.refreshConnectionProfiles(), 'first');
+    assert.equal(payloads.length, 1, 'refresh makes no AI request');
+    await module.scanCandidatesWithAi();
+    assert.equal(payloads.at(-1).payload.secret_id, undefined, 'server resolves the provider active key');
+    assert.deepEqual(profiles, originalProfiles);
+    context.extensionSettings.npcCastingRoom.profileId = 'second';
+    await module.scanCandidatesWithAi();
+    assert.equal(payloads.at(-1).payload.secret_id, 'other-key-id');
+    context.extensionSettings.npcCastingRoom.profileId = 'first';
+    profiles[0]['secret-id'] = 'newly-saved-profile-key';
+    await module.scanCandidatesWithAi();
+    assert.equal(payloads.at(-1).payload.secret_id, 'newly-saved-profile-key');
+    context.extensionSettings.npcCastingRoom.profileId = 'missing';
+    assert.throws(() => module.refreshConnectionProfiles(), /선택한 연결 프로필/);
+    assert.equal(context.extensionSettings.npcCastingRoom.profileId, 'missing');
+    context.extensionSettings.npcCastingRoom.profileId = '';
+    assert.equal(module.refreshConnectionProfiles(), '');
+    assert.equal(rawCalls, 0);
+    module.onDisable();
+});

@@ -414,11 +414,50 @@
   background: rgb(0 0 0 / 65%);
 }
 
-/* The modal is in the browser's top layer; its toast container must be there too. */
-#npcc-wand-dialog > #toast-container {
+/* A private Toastr container, recreated inside the modal for every toast. */
+#npcc-toast-container {
   position: fixed;
+  top: 12px;
+  right: 12px;
   z-index: 2147483647;
   max-width: calc(100vw - 24px);
+  pointer-events: none;
+}
+
+#npcc-toast-container > div {
+  position: relative;
+  overflow: hidden;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  margin: 0 0 6px;
+  padding: 15px;
+  border-radius: 6px;
+  color: var(--SmartThemeBodyColor, #fff);
+  background: var(--SmartThemeBlurTintColor, #202028);
+  border: 1px solid var(--SmartThemeQuoteColor, #888);
+  box-shadow: 0 2px 10px #0006;
+  pointer-events: auto;
+  overflow-wrap: anywhere;
+}
+
+#npcc-toast-container .toast-success { border-left: 4px solid #51a351; }
+#npcc-toast-container .toast-error { border-left: 4px solid #bd362f; }
+#npcc-toast-container .toast-info { border-left: 4px solid #2f96b4; }
+
+#npcc-settings .npcc-profile-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#npcc-settings .npcc-profile-controls select { flex: 1; }
+#npcc-settings #npcc-profile-refresh {
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+  white-space: nowrap;
 }
 
 #npcc-wand-dialog .npcc-dialog-head {
