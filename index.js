@@ -1,4 +1,5 @@
 import { describeRequestError, isVertexProfile, requestVertexProfile } from './vertex-request.js';
+import { buildNpcCreationPrompt } from './npc-creation.js';
 import {
     buildEntryKeys,
     buildLorebookContent,
@@ -27,7 +28,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.6.18';
+const EXTENSION_VERSION = '1.7.0';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -738,6 +739,73 @@ async function promptForName(defaultName) {
     return defaultName;
 }
 
+function creationScope() {
+    const context = getContext();
+    return JSON.stringify([context.chatId, context.groupId, context.characterId,
+        context.characters?.[Number(context.characterId)]?.avatar]);
+}
+
+function hasCreationNameConflict(keys, data, target) {
+    const names = new Set(keys.map((key) => key.trim().toLocaleLowerCase()));
+    return knownCharacterNames().some((name) => names.has(name.toLocaleLowerCase()))
+        || trackedEntries(target.name).some((item) =>
+        [item.name, ...(item.sourceNames ?? [])].some((name) => names.has(name.toLocaleLowerCase())))
+        || Object.values(data?.entries ?? {}).some((entry) =>
+            (Array.isArray(entry?.key) ? entry.key : []).some((key) => names.has(String(key).trim().toLocaleLowerCase())));
+}
+
+export async function prepareNewNpcDraft({ name = '', concept = '' } = {}) {
+    if (generating || aiScanning) return { ok: false, reason: '다른 AI 작업이 끝난 뒤 새 NPC를 만들어 주세요.' };
+    name = String(name).trim();
+    concept = String(concept).trim();
+    if (!concept) return { ok: false, reason: '만들고 싶은 NPC의 설정을 입력해 주세요.' };
+    if (name.length > 200 || /[\r\n\u0000-\u001f]/.test(name)) return { ok: false, reason: 'NPC 이름은 200자 이내의 한 줄로 입력해 주세요.' };
+    const settings = getSettings();
+    if (!String(settings.profileId ?? '').trim() && mainGenerationBusy) {
+        return { ok: false, reason: '메인 연결의 채팅 생성이 끝난 뒤 다시 시도해 주세요.' };
+    }
+    if (settings.entryFormat === 'custom' && !settings.customFormatPrompt.trim()) {
+        return { ok: false, reason: '설정에서 직접 설정 양식의 프롬프트를 입력해 주세요.' };
+    }
+    const scope = creationScope();
+    const target = resolveTargetBook();
+    if (!target) return { ok: false, reason: '로어북을 연결할 캐릭터나 채팅을 찾을 수 없어요.' };
+    generating = true;
+    updateUi();
+    try {
+        const worldApi = await getWorldApi();
+        if (!worldApi) return { ok: false, reason: '이 실리태번 버전에서는 로어북 API를 찾을 수 없어요.' };
+        const data = await worldApi.loadWorldInfo(target.name);
+        if (!data?.entries && !target.createIfMissing) throw new Error('기존 로어북을 읽지 못해 생성을 중단했어요.');
+        if (name && hasCreationNameConflict([name], data, target)) {
+            return { ok: false, reason: '같은 이름의 NPC나 로어북 키워드가 있어요. 새 NPC 이름을 바꿔 주세요.' };
+        }
+        if (scope !== creationScope() || !runtimeActive) return { ok: false, reason: '대상이 바뀌어 생성을 중단했어요.' };
+        requestAbortController = new AbortController();
+        const response = await requestNpcProfile(buildNpcCreationPrompt({
+            name, concept, format: settings.entryFormat, customFormat: settings.customFormatPrompt,
+            referenceSheet: settings.entryFormat === 'sheet' ? referenceSheetText() : '', language: settings.outputLanguage,
+        }), requestAbortController.signal);
+        if (scope !== creationScope() || !runtimeActive || requestAbortController.signal.aborted) {
+            return { ok: false, reason: '대상이 바뀌어 이전 생성 결과를 버렸어요.' };
+        }
+        const parsed = parseProfileResponse(response);
+        // A supplied name is authoritative; creation has no evidence excerpts.
+        const npc = sanitizeSheetProfile({ ...parsed, ...(name ? { name } : {}), example_lines: [] }, '', name);
+        if (!npc) throw new Error('AI가 만든 시트가 검증을 통과하지 못했어요.');
+        const keys = buildEntryKeys(npc, name ? [name] : []);
+        if (hasCreationNameConflict(keys, data, target)) return { ok: false, reason: '생성된 이름이나 별칭이 기존 로어북 키워드와 겹쳐요. 설정에 다른 이름을 지정해 주세요.' };
+        return { ok: true, draft: {
+            npcName: npc.name, content: stripMainCharacterWrapper(npc.sheet), keys,
+            sourceNames: [name || npc.name], target, newNpc: true, creationScope: scope,
+        } };
+    } finally {
+        generating = false;
+        requestAbortController = null;
+        updateUi();
+    }
+}
+
 export async function prepareNpcDraft(candidate, options = {}) {
     if (generating) return { ok: false, reason: '이미 다른 NPC를 생성하는 중이에요.' };
     const target = resolveTargetBook();
@@ -878,6 +946,8 @@ export async function saveNpcDraft(draft) {
     if (!draft?.npcName || !draft?.content || !draft?.target?.name) {
         return { ok: false, reason: '저장할 초안이 없어요.' };
     }
+    if (!draft.content.trim()) return { ok: false, reason: '시트 내용을 입력해 주세요.' };
+    if (draft.newNpc && draft.creationScope !== creationScope()) return { ok: false, reason: '채팅이나 캐릭터가 바뀌었어요. 새 NPC를 다시 만들어 주세요.' };
     if (draft.updateSuggestions) {
         draft.content = composeNpcUpdateContent(draft.baseContent, draft.updateSuggestions, draft.updateLanguage);
         if (draft.content === draft.baseContent) return { ok: false, reason: '적용할 변경점이나 새 사실을 하나 이상 선택해 주세요.' };
@@ -908,6 +978,11 @@ export async function saveNpcDraft(draft) {
         }
         data = { entries: {} };
     }
+
+    if (draft.newNpc && hasCreationNameConflict(draft.keys, data, target)) {
+        return { ok: false, reason: '같은 이름이나 별칭의 항목이 생겼어요. 기존 NPC를 덮어쓰지 않았으니 다른 이름으로 다시 만들어 주세요.' };
+    }
+    if (draft.newNpc && draft.creationScope !== creationScope()) return { ok: false, reason: '채팅이나 캐릭터가 바뀌어 저장을 중단했어요.' };
 
     if (draft.recreateOf) {
         const recovery = draft.recreateOf;
@@ -1040,7 +1115,9 @@ async function generateFromUi(candidate, options = {}) {
             npccToast('info', '메인 연결이 채팅을 생성하는 중이에요. 이번 생성이 끝나면 자동으로 초안을 만들게요.', '🎭캐스팅룸');
             return;
         }
-        const prepared = await prepareNpcDraft(candidate, options);
+        const prepared = candidate.creationConcept !== undefined
+            ? await prepareNewNpcDraft({ name: candidate.name, concept: candidate.creationConcept })
+            : await prepareNpcDraft(candidate, options);
         if (prepared.ok) {
             pendingDraft = prepared.draft;
             updateUi();
@@ -1391,8 +1468,13 @@ function renderDraftPreview() {
             pendingDraft.baseContent, pendingDraft.updateSuggestions, pendingDraft.updateLanguage);
     }
     document.getElementById('npcc-draft-text').textContent = pendingDraft.content;
+    const editable = document.getElementById('npcc-draft-edit');
+    document.getElementById('npcc-draft-text').hidden = Boolean(pendingDraft.newNpc);
+    const editField = document.getElementById('npcc-draft-edit-field');
+    if (editField) editField.hidden = !pendingDraft.newNpc;
+    if (editable && editable.value !== pendingDraft.content) editable.value = pendingDraft.content;
     const save = document.getElementById('npcc-draft-save');
-    if (save) save.disabled = Boolean(pendingDraft.updateSuggestions && pendingDraft.content === pendingDraft.baseContent);
+    if (save) save.disabled = !pendingDraft.content.trim() || Boolean(pendingDraft.updateSuggestions && pendingDraft.content === pendingDraft.baseContent);
     const clean = document.getElementById('npcc-draft-clean');
     if (clean) clean.disabled = Boolean(pendingDraft.updateSuggestions) || !pendingDraft.content.includes('(추정)');
 }
@@ -1442,6 +1524,11 @@ function renderUpdateChoices(draft) {
 function updateUi() {
     if (!uiReady) return;
     const settings = getSettings();
+    const newButton = document.getElementById('npcc-new-generate');
+    if (newButton) {
+        newButton.disabled = generating || aiScanning || Boolean(pendingDraft) || Boolean(queuedCandidate);
+        newButton.textContent = generating ? '⏳ 생성 중…' : '✨ 시트 만들기';
+    }
     document.getElementById('npcc-window-size').value = String(settings.windowSize);
     document.getElementById('npcc-min-messages').value = String(settings.minMessages);
     document.getElementById('npcc-target').value = settings.lorebookTarget;
@@ -1472,7 +1559,7 @@ function updateUi() {
             const updateNote = pendingDraft.updateSuggestions
                 ? `갱신 · 기존 값 ${pendingDraft.updateSuggestions.replacements.length}개 · 새 사실 ${pendingDraft.updateSuggestions.newFacts.length}개 · `
                 : '';
-            document.getElementById('npcc-draft-meta').textContent = `${updateNote}${pendingDraft.recreateOf ? '다시 생성 · 삭제된 이전 본문은 복구되지 않아요. · ' : ''}"${pendingDraft.npcName}" → 로어북 "${pendingDraft.target.name}" · 키워드: ${pendingDraft.keys.join(', ')}`;
+            document.getElementById('npcc-draft-meta').textContent = `${pendingDraft.newNpc ? '새 NPC · 내용을 직접 수정할 수 있어요. · ' : ''}${updateNote}${pendingDraft.recreateOf ? '다시 생성 · 삭제된 이전 본문은 복구되지 않아요. · ' : ''}"${pendingDraft.npcName}" → 로어북 "${pendingDraft.target.name}" · 키워드: ${pendingDraft.keys.join(', ')}`;
             renderDraftPreview();
         }
     }
@@ -1481,7 +1568,7 @@ function updateUi() {
     if (queueNote) {
         queueNote.hidden = !queuedCandidate;
         queueNote.textContent = queuedCandidate
-            ? `⏳ "${queuedCandidate.name}" 항목은 메인 연결의 채팅 생성이 끝나면 자동으로 만들어져요.`
+            ? `⏳ "${queuedCandidate.name || '새 NPC'}" 항목은 메인 연결의 채팅 생성이 끝나면 자동으로 만들어져요.`
             : '';
     }
     const targetNote = document.getElementById('npcc-target-note');
@@ -1573,6 +1660,20 @@ function bindUi() {
             console.error(`${LOG_PREFIX} AI 스캔 실패`, error);
             npccToast('error', `AI 스캔 실패: ${describeRequestError(error)}`, '🎭캐스팅룸');
         }
+    });
+    document.getElementById('npcc-new-generate')?.addEventListener('click', () => {
+        const concept = document.getElementById('npcc-new-concept').value.trim();
+        if (!concept) {
+            npccToast('info', '만들고 싶은 NPC의 설정을 입력해 주세요.', '🎭캐스팅룸');
+            document.getElementById('npcc-new-concept').focus();
+            return;
+        }
+        void generateFromUi({ name: document.getElementById('npcc-new-name').value.trim(), creationConcept: concept });
+    });
+    document.getElementById('npcc-draft-edit')?.addEventListener('input', (event) => {
+        if (!pendingDraft?.newNpc) return;
+        pendingDraft.content = event.currentTarget.value;
+        renderDraftPreview();
     });
     document.getElementById('npcc-select-all')?.addEventListener('change', (event) => {
         selectedCandidateNames = event.currentTarget.checked
@@ -1817,6 +1918,12 @@ function registerEvents() {
         queuedAiScan = false;
         queuedCandidate = null;
         pendingDraft = null;
+        if (typeof document !== 'undefined') {
+            for (const id of ['npcc-new-name', 'npcc-new-concept', 'npcc-draft-edit']) {
+                const input = document.getElementById(id);
+                if (input) input.value = '';
+            }
+        }
         mainGenerationBusy = false;
         requestAbortController?.abort();
         populateProfiles();

@@ -388,6 +388,33 @@
   margin: 4px 0 8px;
 }
 
+#npcc-settings .npcc-new-npc {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 7px;
+  padding: 9px 10px;
+  margin: 8px 0 12px;
+}
+
+#npcc-settings .npcc-new-npc > summary {
+  cursor: pointer;
+  font-size: 0.95em;
+}
+
+#npcc-settings .npcc-concept-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+#npcc-settings .npcc-concept-field textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
 #npcc-settings .npcc-save-note {
   margin-top: 9px;
   text-align: center;
