@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildNpcCreationPrompt } from '../npc-creation.js';
+import { buildNpcCreationPrompt, collectNpcCreationBackground } from '../npc-creation.js';
 
 let sequence = 0;
 async function setup(overrides = {}) {
@@ -133,4 +133,89 @@ test('창작 프롬프트는 네 양식·언어를 지원하며 수집 지시와
         if (format === 'sheet') assert.match(prompt[1].content, /FORMAT ONLY/);
         if (format === 'custom') assert.match(prompt[0].content, /이름\/직업\/성격/);
     }
+});
+
+test('현재 카드와 현재 페르소나만 읽고 채팅·로어북·다른 페르소나는 보내지 않는다', async () => {
+    const env = await setup({
+        characters: [
+            { name: '주인공', avatar: 'main.png', description: '<{{char}}>현장 노동자 {{char}}. {{user}}와 동거.</{{char}}>', personality: '능글맞음', scenario: '투룸', mes_example: '말투 견본', data: {} },
+            { name: '다른카드', avatar: 'other.png', description: '전송하지 않을 다른 카드' },
+        ],
+        powerUserSettings: { persona_description: '{{user}}는 대학생.', persona_descriptions: { other: { description: '전송하지 않을 다른 페르소나' } } },
+        chat: [{ name: '주인공', mes: '전송하지 않을 채팅 사건' }],
+    });
+    env.setBook({ entries: { 4: { key: ['다른인물'], content: '전송하지 않을 로어북 내용' } } });
+    assert.equal((await env.module.prepareNewNpcDraft({ concept: '주인공의 현장 동료' })).ok, true);
+    const text = JSON.stringify(env.prompt());
+    for (const expected of ['현장 노동자 주인공', '사용자와 동거', '능글맞음', '투룸', '말투 견본', '사용자는 대학생']) assert.ok(text.includes(expected));
+    assert.doesNotMatch(text, /전송하지 않을/);
+    assert.doesNotMatch(text, /<주인공>|<\{\{char\}\}>/);
+    assert.match(env.prompt()[0].content, /CURRENT persona sheets as background/);
+    assert.match(env.prompt()[0].content, /flag the conflict in the draft/);
+    env.module.onDisable();
+});
+
+test('설정 참고를 각각 끌 수 있고 껐을 때는 자료가 프롬프트에서 빠진다', async () => {
+    const env = await setup({ powerUserSettings: { persona_description: '페르소나식별문구' } });
+    env.context.characters[0].description = '캐시트식별문구';
+    env.context.extensionSettings.npcCastingRoom.newNpcCharacterContext = false;
+    assert.equal((await env.module.prepareNewNpcDraft({ concept: '현장 동료' })).ok, true);
+    assert.doesNotMatch(JSON.stringify(env.prompt()), /캐시트식별문구/);
+    assert.match(JSON.stringify(env.prompt()), /페르소나식별문구/);
+    env.context.extensionSettings.npcCastingRoom.newNpcCharacterContext = true;
+    env.context.extensionSettings.npcCastingRoom.newNpcPersonaContext = false;
+    await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
+    assert.match(JSON.stringify(env.prompt()), /캐시트식별문구/);
+    assert.doesNotMatch(JSON.stringify(env.prompt()), /페르소나식별문구/);
+    env.context.extensionSettings.npcCastingRoom.newNpcCharacterContext = false;
+    await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
+    assert.doesNotMatch(JSON.stringify(env.prompt()), /캐시트식별문구|페르소나식별문구/);
+    env.module.onDisable();
+});
+
+test('긴 캐시트는 설정 참고와 양식 따라하기에 중복 전송되지 않는다', async () => {
+    const env = await setup();
+    env.context.characters[0].description = '<{{char}}>고유캐시트문구 {{char}}는 현장 노동자.</{{char}}>';
+    env.context.extensionSettings.npcCastingRoom.entryFormat = 'sheet';
+    await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
+    assert.equal(JSON.stringify(env.prompt()).split('고유캐시트문구').length - 1, 1);
+    assert.match(env.prompt()[1].content, /description field of the background character/);
+    env.context.extensionSettings.npcCastingRoom.newNpcCharacterContext = false;
+    await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
+    assert.match(env.prompt()[1].content, /Reference sheet \(FORMAT ONLY, a different character\)/);
+    assert.equal(JSON.stringify(env.prompt()).split('고유캐시트문구').length - 1, 1);
+    env.module.onDisable();
+});
+
+test('그룹챗은 현재 그룹의 카드만 읽고 비어 있는 페르소나는 생략한다', () => {
+    const background = collectNpcCreationBackground({
+        groupId: 'g1', characterId: 2, name1: '사용자',
+        groups: [{ id: 'g1', members: ['a.png', 'b.png'] }],
+        characters: [
+            { name: 'A', avatar: 'a.png', data: { description: 'A의 시트' } },
+            { name: 'B', avatar: 'b.png', description: 'B의 시트' },
+            { name: '밖의인물', avatar: 'c.png', description: '현재 그룹에 없는 시트' },
+        ],
+    });
+    assert.deepEqual(background.characters.map((card) => card.name), ['A', 'B']);
+    assert.equal(background.persona, null);
+    assert.doesNotMatch(JSON.stringify(background), /현재 그룹에 없는/);
+    assert.deepEqual(collectNpcCreationBackground({}, { characters: false, persona: false }), { characters: [], persona: null });
+});
+
+test('목록용 카드가 얕게 로드된 경우 현재 카드만 완전히 읽는다', async () => {
+    const loaded = [];
+    const env = await setup({ characters: [
+        { name: '주인공', avatar: 'main.png', shallow: true, data: {} },
+        { name: '다른카드', avatar: 'other.png', shallow: true },
+    ] });
+    env.context.unshallowCharacter = async (id) => {
+        loaded.push(id);
+        env.context.characters[id].description = '완전히 읽은 캐시트';
+        env.context.characters[id].shallow = false;
+    };
+    assert.equal((await env.module.prepareNewNpcDraft({ concept: '현장 동료' })).ok, true);
+    assert.deepEqual(loaded, [0]);
+    assert.match(JSON.stringify(env.prompt()), /완전히 읽은 캐시트/);
+    env.module.onDisable();
 });

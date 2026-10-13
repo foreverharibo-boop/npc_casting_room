@@ -1,5 +1,5 @@
 import { describeRequestError, isVertexProfile, requestVertexProfile } from './vertex-request.js';
-import { buildNpcCreationPrompt } from './npc-creation.js';
+import { buildNpcCreationPrompt, collectNpcCreationBackground } from './npc-creation.js';
 import {
     buildEntryKeys,
     buildLorebookContent,
@@ -28,7 +28,7 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.7.0';
+const EXTENSION_VERSION = '1.7.1';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
@@ -45,6 +45,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     entryFormat: 'sheet',
     customFormatPrompt: '',
     inferMissing: true,
+    newNpcCharacterContext: true,
+    newNpcPersonaContext: true,
     outputLanguage: 'english',
     dismissed: {},
     createdEntries: {},
@@ -108,6 +110,8 @@ function getSettings() {
         ? settings.entryFormat : 'sheet';
     settings.customFormatPrompt = typeof settings.customFormatPrompt === 'string' ? settings.customFormatPrompt : '';
     settings.inferMissing = settings.inferMissing !== false;
+    settings.newNpcCharacterContext = settings.newNpcCharacterContext !== false;
+    settings.newNpcPersonaContext = settings.newNpcPersonaContext !== false;
     settings.outputLanguage = settings.outputLanguage === 'korean' ? 'korean' : 'english';
     settings.windowSize = Math.max(5, Math.round(Number(settings.windowSize) || DEFAULT_SETTINGS.windowSize));
     settings.maxTokens = Math.max(256, Math.round(Number(settings.maxTokens) || DEFAULT_SETTINGS.maxTokens));
@@ -754,6 +758,26 @@ function hasCreationNameConflict(keys, data, target) {
             (Array.isArray(entry?.key) ? entry.key : []).some((key) => names.has(String(key).trim().toLocaleLowerCase())));
 }
 
+function creationBackground(settings = getSettings()) {
+    return collectNpcCreationBackground(getContext(), {
+        characters: settings.newNpcCharacterContext, persona: settings.newNpcPersonaContext,
+    });
+}
+
+async function loadCreationCards(settings) {
+    const context = getContext();
+    if (typeof context.unshallowCharacter !== 'function') return;
+    const cards = context.characters ?? [];
+    const group = isGroupChat(context) && (context.groups ?? []).find((item) => String(item.id) === String(context.groupId));
+    const indices = settings.newNpcCharacterContext && group
+        ? (group.members ?? []).map((member) => cards.findIndex((card) => card.avatar === member || card.name === member))
+        : !isGroupChat(context) && (settings.newNpcCharacterContext || settings.entryFormat === 'sheet')
+            ? [Number(context.characterId)] : [];
+    for (const id of new Set(indices)) {
+        if (id >= 0 && cards[id]?.shallow) await context.unshallowCharacter(id);
+    }
+}
+
 export async function prepareNewNpcDraft({ name = '', concept = '' } = {}) {
     if (generating || aiScanning) return { ok: false, reason: '다른 AI 작업이 끝난 뒤 새 NPC를 만들어 주세요.' };
     name = String(name).trim();
@@ -780,11 +804,16 @@ export async function prepareNewNpcDraft({ name = '', concept = '' } = {}) {
         if (name && hasCreationNameConflict([name], data, target)) {
             return { ok: false, reason: '같은 이름의 NPC나 로어북 키워드가 있어요. 새 NPC 이름을 바꿔 주세요.' };
         }
+        await loadCreationCards(settings);
         if (scope !== creationScope() || !runtimeActive) return { ok: false, reason: '대상이 바뀌어 생성을 중단했어요.' };
+        const background = creationBackground(settings);
+        const referenceSheet = settings.entryFormat === 'sheet'
+            ? (!isGroupChat() && background.characters.length === 1 ? background.characters[0].description ?? '' : referenceSheetText())
+            : '';
         requestAbortController = new AbortController();
         const response = await requestNpcProfile(buildNpcCreationPrompt({
             name, concept, format: settings.entryFormat, customFormat: settings.customFormatPrompt,
-            referenceSheet: settings.entryFormat === 'sheet' ? referenceSheetText() : '', language: settings.outputLanguage,
+            referenceSheet, language: settings.outputLanguage, background,
         }), requestAbortController.signal);
         if (scope !== creationScope() || !runtimeActive || requestAbortController.signal.aborted) {
             return { ok: false, reason: '대상이 바뀌어 이전 생성 결과를 버렸어요.' };
@@ -1529,6 +1558,21 @@ function updateUi() {
         newButton.disabled = generating || aiScanning || Boolean(pendingDraft) || Boolean(queuedCandidate);
         newButton.textContent = generating ? '⏳ 생성 중…' : '✨ 시트 만들기';
     }
+    for (const [id, key] of [['npcc-new-character-context', 'newNpcCharacterContext'], ['npcc-new-persona-context', 'newNpcPersonaContext']]) {
+        const checkbox = document.getElementById(id);
+        if (checkbox) checkbox.checked = settings[key];
+    }
+    const backgroundNote = document.getElementById('npcc-new-background-note');
+    if (backgroundNote) {
+        const background = creationBackground(settings);
+        const cardNote = settings.newNpcCharacterContext
+            ? background.characters.length ? background.characters.map((card) => card.name).join(', ') : '시트 없음'
+            : '참고 끔';
+        const personaNote = settings.newNpcPersonaContext
+            ? background.persona ? background.persona.name || '현재 페르소나' : '시트 없음'
+            : '참고 끔';
+        backgroundNote.textContent = `설정 참고 · 캐시트: ${cardNote} · 페르소나: ${personaNote}`;
+    }
     document.getElementById('npcc-window-size').value = String(settings.windowSize);
     document.getElementById('npcc-min-messages').value = String(settings.minMessages);
     document.getElementById('npcc-target').value = settings.lorebookTarget;
@@ -1621,6 +1665,8 @@ function bindUi() {
     bindSetting('npcc-min-messages', 'minMessages', Number);
     bindSetting('npcc-target', 'lorebookTarget', String);
     bindSetting('npcc-profile', 'profileId', String);
+    bindSetting('npcc-new-character-context', 'newNpcCharacterContext', Boolean);
+    bindSetting('npcc-new-persona-context', 'newNpcPersonaContext', Boolean);
     document.getElementById('npcc-profile-refresh')?.addEventListener('click', () => {
         try {
             const profileId = refreshConnectionProfiles();
@@ -1931,6 +1977,7 @@ function registerEvents() {
         void refreshCreatedEntryStatus();
     });
     listen('CONNECTION_PROFILE_LOADED', populateProfiles);
+    listen('PERSONA_CHANGED', updateUi);
     eventsRegistered = true;
 }
 
