@@ -230,20 +230,33 @@ test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연
     module.onDisable();
 });
 
-test('장면을 AI에 보내기 전부터 현재 캐릭터와 페르소나 이름을 매크로로 바꾼다', async () => {
+test('장면은 실제 이름으로 AI가 읽고 완성된 로어북만 매크로로 바꾼다', async () => {
     let sentPrompt;
+    let savedBook;
     const context = makeContext({
         chat: [
-            { name: 'Peter', send_date: 1, mes: 'Peter가 Dana에게 물었다. "반갑네." 민수가 잔을 밀어주었다.' },
-            { name: 'Peter', send_date: 2, mes: 'Dana가 보는 앞에서 Peter와 민수는 고개를 끄덕였다.' },
+            { name: 'Peter', send_date: 1, mes: 'Pete가 Dami에게 물었다. "반갑네." 민수가 잔을 밀어주었다.' },
+            { name: 'Peter', send_date: 2, mes: 'Dana가 보는 앞에서 Peter Hale과 민수는 고개를 끄덕였다.' },
         ],
+        characters: [{
+            name: 'Peter', avatar: 'peter.png', data: {},
+            description: '# Peter Hale\nName: Peter Hale\nAlias: Pete',
+        }],
+        powerUserSettings: { persona_description: 'Full Name: 혜담은 (Dana)\nNickname: Dami' },
         loadWorldInfo: async () => null,
-        saveWorldInfo: async () => {},
+        saveWorldInfo: async (_name, data) => { savedBook = structuredClone(data); },
         writeExtensionField: async (id, key, value) => {
             context.characters[id].data.extensions ??= {};
             context.characters[id].data.extensions[key] = value;
         },
-        generateRaw: async ({ prompt }) => { sentPrompt = prompt; return PROFILE_JSON; },
+        generateRaw: async ({ prompt }) => {
+            sentPrompt = prompt;
+            return JSON.stringify({
+                name: '민수', aliases: [],
+                sheet: '[NPC: 민수]\n관계: Peter Hale와 혜담은의 지인.',
+                example_lines: ['반갑네.'],
+            });
+        },
     });
     globalThis.SillyTavern = { getContext: () => context };
     globalThis.toastr = { info() {}, success() {}, error() {} };
@@ -251,9 +264,9 @@ test('장면을 AI에 보내기 전부터 현재 캐릭터와 페르소나 이�
     const candidate = module.scanCandidates().find((item) => item.name === '민수');
     assert.equal((await module.createNpcLorebookEntry(candidate)).ok, true);
     const promptText = JSON.stringify(sentPrompt);
-    assert.match(promptText, /\{\{char\}\}/);
-    assert.match(promptText, /\{\{user\}\}/);
-    assert.doesNotMatch(promptText, /Peter|Dana/);
+    for (const actualName of ['Peter', 'Pete', 'Peter Hale', 'Dana', 'Dami']) assert.match(promptText, new RegExp(actualName));
+    assert.match(savedBook.entries[0].content, /\{\{char\}\}와 \{\{user\}\}의 지인/);
+    assert.doesNotMatch(savedBook.entries[0].content, /Peter|Pete|Dana|Dami|혜담은/);
     module.onDisable();
 });
 
@@ -875,7 +888,7 @@ test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한
     assert.match(prompts[0][0].content, /reference character sheet/i);
     assert.match(prompts[0][0].content, /Fill EVERY section.*\(추정\)/s);
     assert.match(prompts[0][0].content, /Write every field value in English/);
-    assert.match(prompts[0][1].content, /Name: \{\{char\}\}/);
+    assert.match(prompts[0][1].content, /Name: Kieran/);
     const entry = saved[0].data.entries[0];
     assert.match(entry.content, /<character>/);
     assert.match(entry.content, /Name: 민수/);
@@ -918,8 +931,9 @@ test('캐릭터 시트의 <{{char}}> 바깥 태그는 NPC 초안과 로어북에
     const candidate = module.scanCandidates().find((item) => item.name === '민수');
     const prepared = await module.prepareNpcDraft(candidate);
     assert.equal(prepared.ok, true);
-    assert.match(prompts[0][0].content, /omit those outer tags entirely/);
-    assert.match(prompts[0][1].content, /<\{\{char\}\}>/);
+    assert.match(prompts[0][0].content, /reference character sheet/i);
+    assert.doesNotMatch(prompts[0][1].content, /<\{\{char\}\}>/);
+    assert.match(prompts[0][1].content, /Name: Peter/);
     assert.match(prepared.draft.content, /^> OVERVIEW:/);
     assert.match(prepared.draft.content, /> IDENTITY\n- Name: 민수$/);
     assert.doesNotMatch(prepared.draft.content, /<\/?\{\{char\}\}>/);

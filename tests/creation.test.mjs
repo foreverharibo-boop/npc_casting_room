@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildNpcCreationPrompt, collectNpcCreationBackground } from '../npc-creation.js';
+import {
+    anonymizeMainCharacterNames,
+    buildNpcCreationPrompt,
+    collectNpcCreationBackground,
+    extractExplicitIdentityNames,
+} from '../npc-creation.js';
 
 let sequence = 0;
 async function setup(overrides = {}) {
@@ -50,10 +55,12 @@ test('등장 장면 없이 새 NPC를 만들고 수정 후에만 로어북에 �
     assert.equal(env.book(), null);
     assert.equal(env.context.characters[0].data.extensions, undefined);
     assert.doesNotMatch(result.draft.content, /가짜 과거 대사/);
-    result.draft.content += '\n나이: 35세';
+    result.draft.content += '\n나이: 35세\n관계: 주인공과 사용자의 동료';
     assert.equal((await env.module.saveNpcDraft(result.draft)).ok, true);
     assert.deepEqual(env.book().entries[0].key, ['서도윤', '도윤']);
     assert.match(env.book().entries[0].content, /나이: 35세/);
+    assert.match(env.book().entries[0].content, /관계: \{\{char\}\}과 \{\{user\}\}의 동료/);
+    assert.doesNotMatch(env.book().entries[0].content, /주인공|사용자/);
     assert.equal(env.context.characters[0].data.extensions.world, '캐스팅룸-주인공');
     env.module.onDisable();
 });
@@ -145,7 +152,26 @@ test('창작 프롬프트는 네 양식·언어를 지원하며 수집 지시와
     }
 });
 
-test('현재 카드와 현재 페르소나만 읽고 이름은 매크로로 바꿔 보낸다', async () => {
+test('시트에 명시된 본명·영문명·별명만 읽어 각 매크로로 바꾼다', () => {
+    const characterSheet = '# 신 (Shin) - 탑 아이돌\n- **이름**: 아사쿠라 신 (Shin) / 무대명: SHIN\n성격: 신뢰를 중요하게 생각함';
+    const personaSheet = '- **Full Name**: 혜담은 (Dana)\n- Nickname: Dami\n성격: 다정함';
+    assert.deepEqual(extractExplicitIdentityNames(characterSheet), [
+        '아사쿠라 신 (Shin)', 'Shin', '아사쿠라 신', 'SHIN', '신 (Shin)', '신',
+    ]);
+    const context = {
+        characterId: 0, groupId: null, name1: '다나', name2: '신',
+        characters: [{ name: '신', description: characterSheet }],
+        powerUserSettings: { persona_description: personaSheet },
+    };
+    const result = anonymizeMainCharacterNames(
+        '아사쿠라 신과 Shin, SHIN은 혜담은·Dana·Dami와 있다. 신뢰와 김신은 이름이 아니다.',
+        context,
+        ['신'],
+    );
+    assert.equal(result, '{{char}}과 {{char}}, {{char}}은 {{user}}·{{user}}·{{user}}와 있다. 신뢰와 김신은 이름이 아니다.');
+});
+
+test('현재 카드와 현재 페르소나만 실제 이름으로 읽어 AI에 보낸다', async () => {
     const env = await setup({
         characters: [
             { name: '주인공', avatar: 'main.png', description: '<{{char}}>현장 노동자 {{char}}. {{user}}와 동거.</{{char}}>', personality: '능글맞음', scenario: '투룸', mes_example: '말투 견본', data: {} },
@@ -157,8 +183,7 @@ test('현재 카드와 현재 페르소나만 읽고 이름은 매크로로 바�
     env.setBook({ entries: { 4: { key: ['다른인물'], content: '전송하지 않을 로어북 내용' } } });
     assert.equal((await env.module.prepareNewNpcDraft({ concept: '주인공의 현장 동료' })).ok, true);
     const text = JSON.stringify(env.prompt());
-    for (const expected of ['현장 노동자 {{char}}', '{{user}}와 동거', '능글맞음', '투룸', '말투 견본', '{{user}}는 대학생']) assert.ok(text.includes(expected));
-    assert.doesNotMatch(text, /주인공|사용자/);
+    for (const expected of ['현장 노동자 주인공', '사용자와 동거', '능글맞음', '투룸', '말투 견본', '사용자는 대학생', '주인공의 현장 동료']) assert.ok(text.includes(expected));
     assert.doesNotMatch(text, /전송하지 않을/);
     assert.doesNotMatch(text, /<주인공>|<\{\{char\}\}>/);
     assert.match(env.prompt()[0].content, /CURRENT persona sheets as background/);
@@ -208,7 +233,7 @@ test('그룹챗은 현재 그룹의 카드만 읽고 비어 있는 페르소나�
             { name: '밖의인물', avatar: 'c.png', description: '현재 그룹에 없는 시트' },
         ],
     });
-    assert.deepEqual(background.characters.map((card) => card.name), ['{{char}}', '{{char}}']);
+    assert.deepEqual(background.characters.map((card) => card.name), ['A', 'B']);
     assert.equal(background.persona, null);
     assert.doesNotMatch(JSON.stringify(background), /현재 그룹에 없는/);
     assert.deepEqual(collectNpcCreationBackground({}, { characters: false, persona: false }), { characters: [], persona: null });
