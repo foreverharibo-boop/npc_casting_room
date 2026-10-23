@@ -141,10 +141,17 @@ test('기존 로어북 읽기 실패 시 새 NPC 생성을 중단한다', async 
 test('창작 프롬프트는 네 양식·언어를 지원하며 수집 지시와 혼동하지 않는다', () => {
     for (const format of ['sheet', 'balanced', 'compact', 'custom']) {
         const prompt = buildNpcCreationPrompt({ name: '김민철', concept: '친한 사이는 아님', format,
-            customFormat: '이름/직업/성격', referenceSheet: '<{{char}}>MAIN SECRET</{{char}}>', language: 'korean' });
+            customFormat: '이름/직업/성격', referenceSheet: '<{{char}}>MAIN SECRET</{{char}}>', language: 'korean',
+            characterIdentities: ['박주인', '주인'], personaIdentities: ['혜담은', '담은'] });
         assert.match(prompt[0].content, /Preserve every explicit user constraint/);
         assert.match(prompt[0].content, /Do not change another character or invent shared past events/);
         assert.match(prompt[0].content, /Write field values in Korean/);
+        assert.match(prompt[0].content, /\{\{char\}\}.*\["박주인","주인"\]/s);
+        assert.match(prompt[0].content, /\{\{user\}\}.*\["혜담은","담은"\]/s);
+        assert.match(prompt[0].content, /surrounding context.*same spelling/s);
+        assert.match(prompt[0].content, /self-audit the complete sheet.*both directions/s);
+        assert.match(prompt[0].content, /confirm every macro really refers to the mapped current identity/);
+        assert.match(prompt[0].content, /Never replace the new NPC's own name or aliases/);
         assert.doesNotMatch(prompt[0].content, /copied verbatim from the excerpts|infer the most plausible/);
         assert.match(prompt[1].content, /친한 사이는 아님/);
         if (format === 'sheet') assert.match(prompt[1].content, /FORMAT ONLY/);
@@ -188,6 +195,9 @@ test('현재 카드와 현재 페르소나만 실제 이름으로 읽어 AI에 �
     assert.doesNotMatch(text, /<주인공>|<\{\{char\}\}>/);
     assert.match(env.prompt()[0].content, /CURRENT persona sheets as background/);
     assert.match(env.prompt()[0].content, /flag the conflict in the draft/);
+    assert.match(env.prompt()[0].content, /\{\{char\}\}.*\["주인공"\]/s);
+    assert.match(env.prompt()[0].content, /\{\{user\}\}.*\["사용자"\]/s);
+    assert.match(env.prompt()[0].content, /self-audit the complete sheet/);
     env.module.onDisable();
 });
 

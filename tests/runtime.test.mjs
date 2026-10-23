@@ -230,9 +230,10 @@ test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연
     module.onDisable();
 });
 
-test('장면은 실제 이름으로 AI가 읽고 완성된 로어북만 매크로로 바꾼다', async () => {
+test('AI는 실제 이름 장면을 읽고 같은 요청 안에서 로어북을 매크로로 작성·검수한다', async () => {
     let sentPrompt;
     let savedBook;
+    let aiCalls = 0;
     const context = makeContext({
         chat: [
             { name: 'Peter', send_date: 1, mes: 'Pete가 Dami에게 물었다. "반갑네." 민수가 잔을 밀어주었다.' },
@@ -250,10 +251,11 @@ test('장면은 실제 이름으로 AI가 읽고 완성된 로어북만 매크�
             context.characters[id].data.extensions[key] = value;
         },
         generateRaw: async ({ prompt }) => {
+            aiCalls += 1;
             sentPrompt = prompt;
             return JSON.stringify({
                 name: '민수', aliases: [],
-                sheet: '[NPC: 민수]\n관계: Peter Hale와 혜담은의 지인.',
+                sheet: '[NPC: 민수]\n관계: {{char}}와 {{user}}의 지인.',
                 example_lines: ['반갑네.'],
             });
         },
@@ -265,6 +267,12 @@ test('장면은 실제 이름으로 AI가 읽고 완성된 로어북만 매크�
     assert.equal((await module.createNpcLorebookEntry(candidate)).ok, true);
     const promptText = JSON.stringify(sentPrompt);
     for (const actualName of ['Peter', 'Pete', 'Peter Hale', 'Dana', 'Dami']) assert.match(promptText, new RegExp(actualName));
+    assert.match(sentPrompt[0].content, /must be written as \{\{char\}\}/);
+    assert.match(sentPrompt[0].content, /must be written as \{\{user\}\}/);
+    assert.match(sentPrompt[0].content, /surrounding context.*same spelling/s);
+    assert.match(sentPrompt[0].content, /self-audit every newly written field.*both directions/s);
+    assert.match(sentPrompt[0].content, /confirm every macro really refers to the mapped current identity/);
+    assert.equal(aiCalls, 1);
     assert.match(savedBook.entries[0].content, /\{\{char\}\}와 \{\{user\}\}의 지인/);
     assert.doesNotMatch(savedBook.entries[0].content, /Peter|Pete|Dana|Dami|혜담은/);
     module.onDisable();
@@ -900,6 +908,8 @@ test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한
     assert.equal(noUpdate.ok, false);
     assert.match(noUpdate.reason, /변경점이나 새 사실/);
     assert.match(prompts[1][0].content, /old_text.*new_text/);
+    assert.match(prompts[1][0].content, /newly written new_text and fact/);
+    assert.match(prompts[1][0].content, /Do not alter verbatim quotation\/evidence fields or exact-copy fields/);
     assert.equal(saved.length, 1);
     module.onDisable();
 });
