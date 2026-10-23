@@ -24,7 +24,7 @@ function makeContext(overrides = {}) {
     const context = {
         eventTypes: { APP_READY: 'app_ready' },
         eventSource: { on() {}, removeListener() {} },
-        extensionSettings: { npcCastingRoom: { lorebookSelection: '__npcc_new_lorebook__' } },
+        extensionSettings: { npcCastingRoom: { lorebookMode: 'new', lorebookSelection: '' } },
         chatMetadata: {},
         chatId: 'casting-test',
         groupId: null,
@@ -43,10 +43,17 @@ function makeContext(overrides = {}) {
     context.extensionSettings = {
         ...(overrides.extensionSettings ?? context.extensionSettings),
         npcCastingRoom: {
-            lorebookSelection: '__npcc_new_lorebook__',
+            lorebookMode: 'new',
+            lorebookSelection: '',
             ...(overrides.extensionSettings?.npcCastingRoom ?? context.extensionSettings.npcCastingRoom),
         },
     };
+    const suppliedSettings = overrides.extensionSettings?.npcCastingRoom ?? {};
+    if (!Object.hasOwn(suppliedSettings, 'lorebookMode')) {
+        const selected = String(suppliedSettings.lorebookSelection ?? '').trim();
+        const linked = String(context.characters?.[Number(context.characterId)]?.data?.extensions?.world ?? '').trim();
+        context.extensionSettings.npcCastingRoom.lorebookMode = selected ? 'existing' : linked ? 'linked' : 'new';
+    }
     return context;
 }
 
@@ -223,6 +230,62 @@ test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연
     module.onDisable();
 });
 
+test('장면을 AI에 보내기 전부터 현재 캐릭터와 페르소나 이름을 매크로로 바꾼다', async () => {
+    let sentPrompt;
+    const context = makeContext({
+        chat: [
+            { name: 'Peter', send_date: 1, mes: 'Peter가 Dana에게 물었다. "반갑네." 민수가 잔을 밀어주었다.' },
+            { name: 'Peter', send_date: 2, mes: 'Dana가 보는 앞에서 Peter와 민수는 고개를 끄덕였다.' },
+        ],
+        loadWorldInfo: async () => null,
+        saveWorldInfo: async () => {},
+        writeExtensionField: async (id, key, value) => {
+            context.characters[id].data.extensions ??= {};
+            context.characters[id].data.extensions[key] = value;
+        },
+        generateRaw: async ({ prompt }) => { sentPrompt = prompt; return PROFILE_JSON; },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?prompt-macros=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    assert.equal((await module.createNpcLorebookEntry(candidate)).ok, true);
+    const promptText = JSON.stringify(sentPrompt);
+    assert.match(promptText, /\{\{char\}\}/);
+    assert.match(promptText, /\{\{user\}\}/);
+    assert.doesNotMatch(promptText, /Peter|Dana/);
+    module.onDisable();
+});
+
+test('새로 생성은 연결된 로어북을 재사용하지 않고 고유한 새 로어북을 연결한다', async () => {
+    const saves = [];
+    const oldBook = { entries: { 0: { uid: 0, key: ['기존'], content: '보존할 항목' } } };
+    const occupiedBase = { entries: { 0: { uid: 0, key: ['다른 로어북'], content: '보존' } } };
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { lorebookMode: 'new', lorebookSelection: '', lorebookTarget: 'character' } },
+        characters: [{ name: 'Peter', avatar: 'peter.png', data: { extensions: { world: '기존연결' } } }],
+        loadWorldInfo: async (name) => name === '기존연결' ? structuredClone(oldBook)
+            : name === '캐스팅룸-Peter' ? structuredClone(occupiedBase) : null,
+        saveWorldInfo: async (name, data) => saves.push({ name, data: structuredClone(data) }),
+        writeExtensionField: async (id, key, value) => {
+            context.characters[id].data.extensions[key] = value;
+        },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?new-means-new=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const result = await module.createNpcLorebookEntry(candidate);
+    assert.equal(result.ok, true);
+    assert.equal(result.world, '캐스팅룸-Peter 2');
+    assert.deepEqual(saves.map((item) => item.name), ['캐스팅룸-Peter 2']);
+    assert.equal(context.characters[0].data.extensions.world, '캐스팅룸-Peter 2');
+    assert.equal(context.extensionSettings.npcCastingRoom.lorebookMode, 'linked');
+    assert.equal(oldBook.entries[0].content, '보존할 항목');
+    assert.equal(occupiedBase.entries[0].content, '보존');
+    module.onDisable();
+});
+
 test('기존 로어북을 직접 고르면 등장 NPC 항목만 추가하고 카드 연결은 바꾸지 않는다', async () => {
     let book = { entries: {} };
     const saves = [];
@@ -294,7 +357,7 @@ test('한국어 채팅에서 감지한 이름은 영어 로어북으로 음역�
     module.onDisable();
 });
 
-test('카드 연결 함수가 조용히 실패해도 연결 성공으로 표시하지 않고 다음 저장 때 재시도한다', async () => {
+test('카드 자동 연결이 실패하면 생성한 로어북을 기존 선택으로 보존한다', async () => {
     let book = null;
     let attempts = 0;
     const context = makeContext({
@@ -311,9 +374,9 @@ test('카드 연결 함수가 조용히 실패해도 연결 성공으로 표시�
     assert.equal(first.ok, true);
     assert.match(first.note, /자동 연결에는 실패/);
     assert.equal(context.characters[0].data.extensions?.world, undefined);
-    const second = await module.saveNpcDraft(prepared.draft);
-    assert.equal(second.ok, true);
-    assert.equal(attempts, 2);
+    assert.equal(context.extensionSettings.npcCastingRoom.lorebookMode, 'existing');
+    assert.equal(context.extensionSettings.npcCastingRoom.lorebookSelection, '캐스팅룸-Peter');
+    assert.equal(attempts, 1);
     assert.equal(Object.keys(book.entries).length, 1);
     module.onDisable();
 });
@@ -524,7 +587,7 @@ test('로어북 자체를 읽지 못하면 삭제로 간주하지 않고 다시 
     const module = await import(`../index.js?missing-book=${Date.now()}`);
     module.scanCandidates();
     assert.equal((await module.refreshCreatedEntryStatus()).get('기존월드:0'), 'error');
-    await assert.rejects(() => module.prepareNpcDraft({ name: '민수' }, { recreateEntry: { name: '민수', uid: 0 } }), /로어북을 읽지 못했습니다/);
+    await assert.rejects(() => module.prepareNpcDraft({ name: '민수' }, { recreateEntry: { name: '민수', uid: 0 } }), /로어북.*읽지 못해/);
     assert.equal(calls, 0);
     module.onDisable();
 });
@@ -921,7 +984,10 @@ test('직접 설정 양식은 입력을 요구하며 생성과 갱신에서 같�
     let book = { entries: {} };
     const customFormatPrompt = '<npc> 태그 안에 말투와 중요한 사건만 두 줄로 적어.';
     const context = makeContext({
-        extensionSettings: { npcCastingRoom: { entryFormat: 'custom', customFormatPrompt: '' } },
+        extensionSettings: { npcCastingRoom: {
+            entryFormat: 'custom', customFormatPrompt: '',
+            lorebookMode: 'existing', lorebookSelection: '기존월드',
+        } },
         generateRaw: async ({ prompt }) => {
             prompts.push(prompt);
             return prompts.length === 1

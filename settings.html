@@ -106,10 +106,20 @@
 
       <section id="npcc-panel-settings" class="npcc-panel" role="tabpanel" aria-labelledby="npcc-tab-settings" hidden>
         <div class="npcc-field">
-          <label for="npcc-lorebook-selection">저장할 로어북</label>
+          <label for="npcc-lorebook-mode">로어북 저장 방식</label>
+          <select id="npcc-lorebook-mode" class="text_pole">
+            <option value="">저장 방식을 선택해 주세요</option>
+            <option value="linked">현재 캐릭터에 연결된 로어북</option>
+            <option value="existing">실리태번 로어북 중에서 선택</option>
+            <option value="new">새 로어북 생성 (자동 연결)</option>
+          </select>
+        </div>
+
+        <div id="npcc-existing-lorebook-options" class="npcc-field" hidden>
+          <label for="npcc-lorebook-selection">실리태번 로어북</label>
           <div class="npcc-profile-controls">
             <select id="npcc-lorebook-selection" class="text_pole">
-              <option value="">저장할 로어북을 선택해 주세요</option>
+              <option value="">로어북을 선택해 주세요</option>
             </select>
             <button id="npcc-lorebook-refresh" class="menu_button" type="button">새로고침</button>
           </div>

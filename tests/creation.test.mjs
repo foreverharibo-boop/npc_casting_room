@@ -5,19 +5,20 @@ import { buildNpcCreationPrompt, collectNpcCreationBackground } from '../npc-cre
 let sequence = 0;
 async function setup(overrides = {}) {
     let book = null;
+    let bookName = '';
     let writes = 0;
     let calls = 0;
     let prompt;
     const context = {
         eventTypes: { APP_READY: 'ready' },
         eventSource: { on() {}, removeListener() {} },
-        extensionSettings: { npcCastingRoom: { entryFormat: 'balanced', outputLanguage: 'korean', lorebookSelection: '__npcc_new_lorebook__' } },
+        extensionSettings: { npcCastingRoom: { entryFormat: 'balanced', outputLanguage: 'korean', lorebookMode: 'new', lorebookSelection: '' } },
         chatMetadata: {}, chatId: 'new-npc-test', groupId: null, characterId: 0,
         name1: '사용자', name2: '주인공', chat: [], groups: [],
         characters: [{ name: '주인공', avatar: 'main.png', data: {} }],
         saveSettingsDebounced() {}, saveMetadataDebounced() {}, updateWorldInfoList: async () => {},
-        loadWorldInfo: async () => book && structuredClone(book),
-        saveWorldInfo: async (_name, data) => { writes++; book = structuredClone(data); },
+        loadWorldInfo: async (name) => name === bookName && book ? structuredClone(book) : null,
+        saveWorldInfo: async (name, data) => { writes++; bookName = name; book = structuredClone(data); },
         writeExtensionField: async (id, key, value) => {
             context.characters[id].data.extensions ??= {};
             context.characters[id].data.extensions[key] = value;
@@ -31,7 +32,11 @@ async function setup(overrides = {}) {
     };
     globalThis.SillyTavern = { getContext: () => context };
     const module = await import(`../index.js?creation-test=${++sequence}`);
-    return { module, context, book: () => book, writes: () => writes, calls: () => calls, prompt: () => prompt, setBook: (data) => { book = data; } };
+    return {
+        module, context, book: () => book, bookName: () => bookName,
+        writes: () => writes, calls: () => calls, prompt: () => prompt,
+        setBook: (data, name = '캐스팅룸-주인공') => { book = data; bookName = data ? name : ''; },
+    };
 }
 
 test('등장 장면 없이 새 NPC를 만들고 수정 후에만 로어북에 저장·연결한다', async () => {
@@ -74,7 +79,9 @@ test('빈 설정·빈 직접 양식은 API 호출 전에 거부한다', async ()
 
 test('기존 로어북과 같은 이름은 생성 전에 거부한다', async () => {
     const env = await setup();
-    env.setBook({ entries: { 4: { uid: 4, key: ['김민철'], content: '원본' } } });
+    env.context.extensionSettings.npcCastingRoom.lorebookMode = 'existing';
+    env.context.extensionSettings.npcCastingRoom.lorebookSelection = '기존월드';
+    env.setBook({ entries: { 4: { uid: 4, key: ['김민철'], content: '원본' } } }, '기존월드');
     const result = await env.module.prepareNewNpcDraft({ name: '김민철', concept: '현장 동료' });
     assert.equal(result.ok, false);
     assert.equal(env.calls(), 0);
@@ -85,11 +92,13 @@ test('기존 로어북과 같은 이름은 생성 전에 거부한다', async ()
 
 test('AI가 정한 별칭 충돌과 생성 뒤 추가된 같은 이름을 거부한다', async () => {
     const env = await setup();
-    env.setBook({ entries: { 4: { uid: 4, key: ['도윤'], content: '원본' } } });
+    env.context.extensionSettings.npcCastingRoom.lorebookMode = 'existing';
+    env.context.extensionSettings.npcCastingRoom.lorebookSelection = '기존월드';
+    env.setBook({ entries: { 4: { uid: 4, key: ['도윤'], content: '원본' } } }, '기존월드');
     assert.equal((await env.module.prepareNewNpcDraft({ concept: '현장 동료' })).ok, false);
-    env.setBook(null);
+    env.setBook({ entries: {} }, '기존월드');
     const result = await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
-    env.setBook({ entries: { 4: { uid: 4, key: ['서도윤'], content: '나중에 추가한 원본' } } });
+    env.setBook({ entries: { 4: { uid: 4, key: ['서도윤'], content: '나중에 추가한 원본' } } }, '기존월드');
     assert.equal((await env.module.saveNpcDraft(result.draft)).ok, false);
     assert.equal(env.writes(), 0);
     assert.equal(env.book().entries[4].content, '나중에 추가한 원본');
@@ -114,6 +123,7 @@ test('생성 중 채팅 전환 시 결과를 버리고 저장 전 전환도 거�
 
 test('기존 로어북 읽기 실패 시 새 NPC 생성을 중단한다', async () => {
     const env = await setup();
+    env.context.extensionSettings.npcCastingRoom.lorebookMode = 'linked';
     env.context.characters[0].data.extensions = { world: '기존월드' };
     await assert.rejects(env.module.prepareNewNpcDraft({ concept: '현장 동료' }), /로어북을 읽지 못해/);
     assert.equal(env.calls(), 0);
@@ -148,7 +158,7 @@ test('현재 카드와 현재 페르소나만 읽고 이름은 매크로로 바�
     assert.equal((await env.module.prepareNewNpcDraft({ concept: '주인공의 현장 동료' })).ok, true);
     const text = JSON.stringify(env.prompt());
     for (const expected of ['현장 노동자 {{char}}', '{{user}}와 동거', '능글맞음', '투룸', '말투 견본', '{{user}}는 대학생']) assert.ok(text.includes(expected));
-    assert.doesNotMatch(text, /"name":"주인공"|"name":"사용자"|현장 노동자 주인공|사용자는 대학생/);
+    assert.doesNotMatch(text, /주인공|사용자/);
     assert.doesNotMatch(text, /전송하지 않을/);
     assert.doesNotMatch(text, /<주인공>|<\{\{char\}\}>/);
     assert.match(env.prompt()[0].content, /CURRENT persona sheets as background/);
@@ -222,6 +232,7 @@ test('AI가 실제 주인공·페르소나 이름을 출력해도 새 NPC 초안
 
 test('저장할 로어북을 고르지 않으면 생성하지 않는다', async () => {
     const env = await setup();
+    env.context.extensionSettings.npcCastingRoom.lorebookMode = '';
     env.context.extensionSettings.npcCastingRoom.lorebookSelection = '';
     const result = await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
     assert.equal(result.ok, false);
@@ -235,8 +246,9 @@ test('기존 로어북을 선택하면 항목만 추가하고 캐릭터에는 �
     const env = await setup({
         writeExtensionField: async () => { fieldWrites++; },
     });
+    env.context.extensionSettings.npcCastingRoom.lorebookMode = 'existing';
     env.context.extensionSettings.npcCastingRoom.lorebookSelection = '기존월드';
-    env.setBook({ entries: {} });
+    env.setBook({ entries: {} }, '기존월드');
     const prepared = await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
     assert.equal(prepared.ok, true);
     assert.equal(prepared.draft.target.binding, 'existing-selection');
