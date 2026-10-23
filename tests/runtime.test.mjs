@@ -21,10 +21,10 @@ function makeChat() {
 }
 
 function makeContext(overrides = {}) {
-    return {
+    const context = {
         eventTypes: { APP_READY: 'app_ready' },
         eventSource: { on() {}, removeListener() {} },
-        extensionSettings: {},
+        extensionSettings: { npcCastingRoom: { lorebookSelection: '__npcc_new_lorebook__' } },
         chatMetadata: {},
         chatId: 'casting-test',
         groupId: null,
@@ -40,6 +40,14 @@ function makeContext(overrides = {}) {
         generateRaw: async () => PROFILE_JSON,
         ...overrides,
     };
+    context.extensionSettings = {
+        ...(overrides.extensionSettings ?? context.extensionSettings),
+        npcCastingRoom: {
+            lorebookSelection: '__npcc_new_lorebook__',
+            ...(overrides.extensionSettings?.npcCastingRoom ?? context.extensionSettings.npcCastingRoom),
+        },
+    };
+    return context;
 }
 
 test('다시 스캔은 API 호출이 없고 AI 스캔은 원문으로 확인된 NPC만 올린다', async () => {
@@ -203,6 +211,8 @@ test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연
     assert.match(entry.content, /\[NPC: 민수\]/);
     assert.match(entry.content, /성격:/);
     assert.match(entry.content, /반갑네, 오랜만이군/);
+    assert.match(entry.content, /\{\{char\}\}의 단골 바텐더/);
+    assert.doesNotMatch(entry.content, /Peter의 단골/);
     assert.equal(entry.constant, false);
     assert.deepEqual(fieldWrites, [[0, 'world', '캐스팅룸-Peter']]);
     assert.equal(context.characters[0].data.extensions.world, '캐스팅룸-Peter');
@@ -210,6 +220,32 @@ test('새 캐릭터 로어북을 만들어 항목을 넣고 카드에 자동 연
     const tracked = context.extensionSettings.npcCastingRoom.createdEntries['캐스팅룸-Peter'];
     assert.equal(tracked.length, 1);
     assert.equal(tracked[0].name, '민수');
+    module.onDisable();
+});
+
+test('기존 로어북을 직접 고르면 등장 NPC 항목만 추가하고 카드 연결은 바꾸지 않는다', async () => {
+    let book = { entries: {} };
+    const saves = [];
+    const fieldWrites = [];
+    const context = makeContext({
+        extensionSettings: { npcCastingRoom: { lorebookSelection: '공용 NPC 로어북' } },
+        loadWorldInfo: async (name) => name === '공용 NPC 로어북' ? structuredClone(book) : null,
+        saveWorldInfo: async (name, data) => {
+            saves.push(name);
+            book = structuredClone(data);
+        },
+        writeExtensionField: async (...args) => fieldWrites.push(args),
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?existing-choice=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const result = await module.createNpcLorebookEntry(candidate);
+    assert.equal(result.ok, true);
+    assert.equal(result.world, '공용 NPC 로어북');
+    assert.deepEqual(saves, ['공용 NPC 로어북']);
+    assert.deepEqual(fieldWrites, []);
+    assert.equal(context.characters[0].data.extensions, undefined);
     module.onDisable();
 });
 
@@ -776,7 +812,7 @@ test('카드에 시트가 있으면 그 양식을 따라 NPC 항목을 작성한
     assert.match(prompts[0][0].content, /reference character sheet/i);
     assert.match(prompts[0][0].content, /Fill EVERY section.*\(추정\)/s);
     assert.match(prompts[0][0].content, /Write every field value in English/);
-    assert.match(prompts[0][1].content, /Name: Kieran/);
+    assert.match(prompts[0][1].content, /Name: \{\{char\}\}/);
     const entry = saved[0].data.entries[0];
     assert.match(entry.content, /<character>/);
     assert.match(entry.content, /Name: 민수/);

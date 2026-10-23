@@ -11,7 +11,7 @@ async function setup(overrides = {}) {
     const context = {
         eventTypes: { APP_READY: 'ready' },
         eventSource: { on() {}, removeListener() {} },
-        extensionSettings: { npcCastingRoom: { entryFormat: 'balanced', outputLanguage: 'korean' } },
+        extensionSettings: { npcCastingRoom: { entryFormat: 'balanced', outputLanguage: 'korean', lorebookSelection: '__npcc_new_lorebook__' } },
         chatMetadata: {}, chatId: 'new-npc-test', groupId: null, characterId: 0,
         name1: '사용자', name2: '주인공', chat: [], groups: [],
         characters: [{ name: '주인공', avatar: 'main.png', data: {} }],
@@ -135,7 +135,7 @@ test('창작 프롬프트는 네 양식·언어를 지원하며 수집 지시와
     }
 });
 
-test('현재 카드와 현재 페르소나만 읽고 채팅·로어북·다른 페르소나는 보내지 않는다', async () => {
+test('현재 카드와 현재 페르소나만 읽고 이름은 매크로로 바꿔 보낸다', async () => {
     const env = await setup({
         characters: [
             { name: '주인공', avatar: 'main.png', description: '<{{char}}>현장 노동자 {{char}}. {{user}}와 동거.</{{char}}>', personality: '능글맞음', scenario: '투룸', mes_example: '말투 견본', data: {} },
@@ -147,7 +147,8 @@ test('현재 카드와 현재 페르소나만 읽고 채팅·로어북·다른 �
     env.setBook({ entries: { 4: { key: ['다른인물'], content: '전송하지 않을 로어북 내용' } } });
     assert.equal((await env.module.prepareNewNpcDraft({ concept: '주인공의 현장 동료' })).ok, true);
     const text = JSON.stringify(env.prompt());
-    for (const expected of ['현장 노동자 주인공', '사용자와 동거', '능글맞음', '투룸', '말투 견본', '사용자는 대학생']) assert.ok(text.includes(expected));
+    for (const expected of ['현장 노동자 {{char}}', '{{user}}와 동거', '능글맞음', '투룸', '말투 견본', '{{user}}는 대학생']) assert.ok(text.includes(expected));
+    assert.doesNotMatch(text, /"name":"주인공"|"name":"사용자"|현장 노동자 주인공|사용자는 대학생/);
     assert.doesNotMatch(text, /전송하지 않을/);
     assert.doesNotMatch(text, /<주인공>|<\{\{char\}\}>/);
     assert.match(env.prompt()[0].content, /CURRENT persona sheets as background/);
@@ -197,10 +198,54 @@ test('그룹챗은 현재 그룹의 카드만 읽고 비어 있는 페르소나�
             { name: '밖의인물', avatar: 'c.png', description: '현재 그룹에 없는 시트' },
         ],
     });
-    assert.deepEqual(background.characters.map((card) => card.name), ['A', 'B']);
+    assert.deepEqual(background.characters.map((card) => card.name), ['{{char}}', '{{char}}']);
     assert.equal(background.persona, null);
     assert.doesNotMatch(JSON.stringify(background), /현재 그룹에 없는/);
     assert.deepEqual(collectNpcCreationBackground({}, { characters: false, persona: false }), { characters: [], persona: null });
+});
+
+test('AI가 실제 주인공·페르소나 이름을 출력해도 새 NPC 초안은 매크로로 정리한다', async () => {
+    const env = await setup({
+        generateRaw: async () => JSON.stringify({
+            name: '서도윤', aliases: [],
+            sheet: '[NPC: 서도윤]\n관계: 주인공의 동료이며 사용자에게 호의적이다.',
+            example_lines: [],
+        }),
+    });
+    const result = await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
+    assert.equal(result.ok, true);
+    assert.match(result.draft.content, /\{\{char\}\}의 동료/);
+    assert.match(result.draft.content, /\{\{user\}\}에게 호의적/);
+    assert.doesNotMatch(result.draft.content, /주인공|사용자/);
+    env.module.onDisable();
+});
+
+test('저장할 로어북을 고르지 않으면 생성하지 않는다', async () => {
+    const env = await setup();
+    env.context.extensionSettings.npcCastingRoom.lorebookSelection = '';
+    const result = await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /로어북.*선택/);
+    assert.equal(env.calls(), 0);
+    env.module.onDisable();
+});
+
+test('기존 로어북을 선택하면 항목만 추가하고 캐릭터에는 자동 연결하지 않는다', async () => {
+    let fieldWrites = 0;
+    const env = await setup({
+        writeExtensionField: async () => { fieldWrites++; },
+    });
+    env.context.extensionSettings.npcCastingRoom.lorebookSelection = '기존월드';
+    env.setBook({ entries: {} });
+    const prepared = await env.module.prepareNewNpcDraft({ concept: '현장 동료' });
+    assert.equal(prepared.ok, true);
+    assert.equal(prepared.draft.target.binding, 'existing-selection');
+    const saved = await env.module.saveNpcDraft(prepared.draft);
+    assert.equal(saved.ok, true);
+    assert.equal(saved.world, '기존월드');
+    assert.equal(fieldWrites, 0);
+    assert.equal(env.context.characters[0].data.extensions, undefined);
+    env.module.onDisable();
 });
 
 test('목록용 카드가 얕게 로드된 경우 현재 카드만 완전히 읽는다', async () => {

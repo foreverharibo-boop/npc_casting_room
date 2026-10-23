@@ -495,7 +495,8 @@
 }
 
 #npcc-settings .npcc-profile-controls select { flex: 1; }
-#npcc-settings #npcc-profile-refresh {
+#npcc-settings #npcc-profile-refresh,
+#npcc-settings #npcc-lorebook-refresh {
   flex: 0 0 auto;
   width: auto;
   margin: 0;

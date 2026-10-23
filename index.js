@@ -1,5 +1,5 @@
 import { describeRequestError, isVertexProfile, requestVertexProfile } from './vertex-request.js';
-import { buildNpcCreationPrompt, collectNpcCreationBackground } from './npc-creation.js';
+import { anonymizeMainCharacterNames, buildNpcCreationPrompt, collectNpcCreationBackground } from './npc-creation.js';
 import {
     buildEntryKeys,
     buildLorebookContent,
@@ -28,8 +28,9 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.7.1';
+const EXTENSION_VERSION = '1.8.0';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
+const NEW_LOREBOOK_VALUE = '__npcc_new_lorebook__';
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
 const MAX_SCENE_CHARS = 200000;
@@ -39,6 +40,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     windowSize: 30,
     minMessages: 2,
     lorebookTarget: 'character',
+    lorebookSelection: '',
     profileId: '',
     activeKeyProfiles: {},
     maxTokens: 1200,
@@ -76,6 +78,9 @@ let requestAbortController = null;
 let pendingDraft = null;
 let wandDialog = null;
 let settingsHome = null;
+let availableLorebookNames = [];
+let lorebookListLoading = false;
+let lorebookListError = '';
 const registeredEventHandlers = [];
 
 function getContext() {
@@ -103,6 +108,8 @@ function getSettings() {
     settings.createdEntries = settings.createdEntries && typeof settings.createdEntries === 'object' ? settings.createdEntries : {};
     settings.mergedGroups = settings.mergedGroups && typeof settings.mergedGroups === 'object' ? settings.mergedGroups : {};
     settings.lorebookTarget = settings.lorebookTarget === 'chat' ? 'chat' : 'character';
+    settings.lorebookSelection = typeof settings.lorebookSelection === 'string'
+        ? settings.lorebookSelection.trim() : '';
     // Old "basic" was a verbose legacy layout. Migrate it to the new,
     // deliberately shortest basic NPC sheet.
     settings.entryFormat = settings.entryFormat === 'basic' ? 'compact' : settings.entryFormat;
@@ -328,6 +335,11 @@ function sanitizeBookName(value) {
 export function resolveTargetBook() {
     const context = getContext();
     const settings = getSettings();
+    const selection = String(settings.lorebookSelection ?? '').trim();
+    if (!selection) return null;
+    if (selection !== NEW_LOREBOOK_VALUE) {
+        return { name: selection, binding: 'existing-selection', createIfMissing: false };
+    }
     if (settings.lorebookTarget === 'chat' || isGroupChat(context)) {
         const metadata = context.chatMetadata;
         if (!metadata || typeof metadata !== 'object') return null;
@@ -378,6 +390,90 @@ async function refreshWorldList(worldApi) {
         }
     }
     if (typeof update === 'function') await update.call(worldApi);
+}
+
+function renderLorebookChoices() {
+    if (!uiReady) return;
+    const select = document.getElementById('npcc-lorebook-selection');
+    if (!select) return;
+    const selected = getSettings().lorebookSelection;
+    select.replaceChildren();
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = lorebookListLoading ? '로어북 목록 불러오는 중…' : '저장할 로어북을 선택해 주세요';
+    select.append(placeholder);
+
+    const create = document.createElement('option');
+    create.value = NEW_LOREBOOK_VALUE;
+    create.textContent = '＋ 새 로어북 생성 (자동 연결)';
+    select.append(create);
+
+    if (availableLorebookNames.length) {
+        const group = document.createElement('optgroup');
+        group.label = '기존 로어북에 추가 (자동 연결 안 함)';
+        for (const name of availableLorebookNames) {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            group.append(option);
+        }
+        select.append(group);
+    }
+    if (selected && selected !== NEW_LOREBOOK_VALUE && !availableLorebookNames.includes(selected)) {
+        const missing = document.createElement('option');
+        missing.value = selected;
+        missing.textContent = `${selected} (현재 목록에서 찾지 못함)`;
+        select.append(missing);
+    }
+    select.value = selected;
+    select.disabled = lorebookListLoading;
+
+    const refresh = document.getElementById('npcc-lorebook-refresh');
+    if (refresh) {
+        refresh.disabled = lorebookListLoading;
+        refresh.textContent = lorebookListLoading ? '불러오는 중…' : '새로고침';
+    }
+    const note = document.getElementById('npcc-lorebook-note');
+    if (note) {
+        note.textContent = lorebookListError
+            ? `로어북 목록을 불러오지 못했어요: ${lorebookListError}`
+            : selected === NEW_LOREBOOK_VALUE
+                ? '현재 방식대로 새 로어북을 만들고 캐릭터 또는 채팅에 자동 연결해요.'
+                : selected
+                    ? `기존 로어북 「${selected}」에 항목만 추가해요. 캐릭터에는 자동 연결하지 않아요.`
+                    : '기존 로어북을 고르거나 새 로어북 생성을 선택해야 초안을 만들 수 있어요.';
+    }
+    const newOptions = document.getElementById('npcc-new-lorebook-options');
+    if (newOptions) newOptions.hidden = selected !== NEW_LOREBOOK_VALUE;
+}
+
+export async function refreshLorebookChoices() {
+    if (lorebookListLoading) return availableLorebookNames;
+    lorebookListLoading = true;
+    lorebookListError = '';
+    renderLorebookChoices();
+    try {
+        const module = await import('../../../world-info.js');
+        if (typeof module.updateWorldInfoList === 'function') await module.updateWorldInfoList();
+        availableLorebookNames = [...new Set((Array.isArray(module.world_names) ? module.world_names : [])
+            .map((name) => String(name ?? '').trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b));
+    } catch (error) {
+        const context = getContext();
+        const fallback = context.world_names ?? context.worldNames;
+        if (Array.isArray(fallback)) {
+            availableLorebookNames = [...new Set(fallback.map((name) => String(name ?? '').trim()).filter(Boolean))]
+                .sort((a, b) => a.localeCompare(b));
+        } else {
+            lorebookListError = error?.message ?? String(error);
+            console.warn(`${LOG_PREFIX} 로어북 목록 불러오기 실패`, error);
+        }
+    } finally {
+        lorebookListLoading = false;
+        renderLorebookChoices();
+    }
+    return availableLorebookNames;
 }
 
 async function getWriteExtensionField() {
@@ -454,7 +550,7 @@ function referenceSheetText() {
     const description = String(character?.description ?? character?.data?.description ?? '').trim();
     // Long character sheets are the format reference — clip only as a runaway
     // backstop, far above any realistic sheet length.
-    return description.slice(0, 1000000);
+    return anonymizeMainCharacterNames(description.slice(0, 1000000), context, [character?.name]);
 }
 
 function stripMainCharacterWrapper(sheet) {
@@ -745,8 +841,25 @@ async function promptForName(defaultName) {
 
 function creationScope() {
     const context = getContext();
+    const settings = getSettings();
     return JSON.stringify([context.chatId, context.groupId, context.characterId,
-        context.characters?.[Number(context.characterId)]?.avatar]);
+        context.characters?.[Number(context.characterId)]?.avatar,
+        settings.lorebookSelection, settings.lorebookTarget]);
+}
+
+function currentMainCharacterNames(context = getContext()) {
+    const cards = Array.isArray(context.characters) ? context.characters : [];
+    if (isGroupChat(context)) {
+        const group = (context.groups ?? []).find((item) => String(item?.id) === String(context.groupId));
+        return (group?.members ?? [])
+            .map((member) => cards.find((card) => card?.avatar === member || card?.name === member)?.name)
+            .filter(Boolean);
+    }
+    return [cards[Number(context.characterId)]?.name, context.name2].filter(Boolean);
+}
+
+function anonymizeLorebookContent(content) {
+    return anonymizeMainCharacterNames(content, getContext(), currentMainCharacterNames());
 }
 
 function hasCreationNameConflict(keys, data, target) {
@@ -793,7 +906,7 @@ export async function prepareNewNpcDraft({ name = '', concept = '' } = {}) {
     }
     const scope = creationScope();
     const target = resolveTargetBook();
-    if (!target) return { ok: false, reason: '로어북을 연결할 캐릭터나 채팅을 찾을 수 없어요.' };
+    if (!target) return { ok: false, reason: '저장할 기존 로어북이나 「새 로어북 생성」을 먼저 선택해 주세요.' };
     generating = true;
     updateUi();
     try {
@@ -825,7 +938,7 @@ export async function prepareNewNpcDraft({ name = '', concept = '' } = {}) {
         const keys = buildEntryKeys(npc, name ? [name] : []);
         if (hasCreationNameConflict(keys, data, target)) return { ok: false, reason: '생성된 이름이나 별칭이 기존 로어북 키워드와 겹쳐요. 설정에 다른 이름을 지정해 주세요.' };
         return { ok: true, draft: {
-            npcName: npc.name, content: stripMainCharacterWrapper(npc.sheet), keys,
+            npcName: npc.name, content: anonymizeLorebookContent(stripMainCharacterWrapper(npc.sheet)), keys,
             sourceNames: [name || npc.name], target, newNpc: true, creationScope: scope,
         } };
     } finally {
@@ -838,7 +951,7 @@ export async function prepareNewNpcDraft({ name = '', concept = '' } = {}) {
 export async function prepareNpcDraft(candidate, options = {}) {
     if (generating) return { ok: false, reason: '이미 다른 NPC를 생성하는 중이에요.' };
     const target = resolveTargetBook();
-    if (!target) return { ok: false, reason: '로어북을 연결할 캐릭터나 채팅을 찾을 수 없어요.' };
+    if (!target) return { ok: false, reason: '저장할 기존 로어북이나 「새 로어북 생성」을 먼저 선택해 주세요.' };
     const worldApi = await getWorldApi();
     if (!worldApi) return { ok: false, reason: '이 실리태번 버전에서는 로어북 API를 찾을 수 없어요.' };
 
@@ -952,6 +1065,7 @@ export async function prepareNpcDraft(candidate, options = {}) {
         } else {
             content = buildLorebookContent(npc);
         }
+        content = anonymizeLorebookContent(content);
         return {
             ok: true,
             draft: {
@@ -1375,6 +1489,9 @@ function candidateForEntry(entry) {
 function currentBookNameForUi() {
     const context = getContext();
     const settings = getSettings();
+    const selection = String(settings.lorebookSelection ?? '').trim();
+    if (!selection) return '';
+    if (selection !== NEW_LOREBOOK_VALUE) return selection;
     if (settings.lorebookTarget === 'chat' || isGroupChat(context)) {
         return typeof context.chatMetadata?.[CHAT_LOREBOOK_METADATA_KEY] === 'string'
             ? context.chatMetadata[CHAT_LOREBOOK_METADATA_KEY].trim()
@@ -1576,6 +1693,8 @@ function updateUi() {
     document.getElementById('npcc-window-size').value = String(settings.windowSize);
     document.getElementById('npcc-min-messages').value = String(settings.minMessages);
     document.getElementById('npcc-target').value = settings.lorebookTarget;
+    const newLorebookOptions = document.getElementById('npcc-new-lorebook-options');
+    if (newLorebookOptions) newLorebookOptions.hidden = settings.lorebookSelection !== NEW_LOREBOOK_VALUE;
     const maxTokensInput = document.getElementById('npcc-max-tokens');
     if (maxTokensInput) maxTokensInput.value = String(settings.maxTokens);
     const entryFormatSelect = document.getElementById('npcc-entry-format');
@@ -1618,10 +1737,10 @@ function updateUi() {
     const targetNote = document.getElementById('npcc-target-note');
     if (targetNote) {
         targetNote.textContent = isGroupChat()
-            ? '그룹챗에서는 채팅 로어북에만 저장돼요.'
+            ? '새로 만들면 그룹챗에서는 채팅 로어북에 연결해요.'
             : settings.lorebookTarget === 'character'
-                ? '같은 카드로 새 챗을 파도 NPC가 따라와요. 카드에 이미 로어북이 있으면 그 로어북에 항목을 추가해요.'
-                : '이 채팅에서만 NPC가 유지돼요.';
+                ? '새 로어북을 만들고 현재 카드에 자동 연결해요. 같은 카드의 새 챗에도 NPC가 따라와요.'
+                : '새 로어북을 만들고 현재 채팅에 자동 연결해요.';
     }
     renderCandidates();
     renderCreated();
@@ -1654,6 +1773,26 @@ function bindUi() {
     });
     document.getElementById('npcc-check-created')?.addEventListener('click', () => {
         void refreshCreatedEntryStatus();
+    });
+    document.getElementById('npcc-lorebook-selection')?.addEventListener('change', (event) => {
+        const settings = getSettings();
+        settings.lorebookSelection = event.currentTarget.value;
+        saveSettings();
+        createdStatusRequest += 1;
+        createdStatusScope = '';
+        createdEntryStatus.clear();
+        renderLorebookChoices();
+        scanCandidates();
+        updateUi();
+        void refreshCreatedEntryStatus();
+    });
+    document.getElementById('npcc-lorebook-refresh')?.addEventListener('click', async () => {
+        await refreshLorebookChoices();
+        if (lorebookListError) {
+            npccToast('error', `로어북 목록을 불러오지 못했어요: ${lorebookListError}`, '🎭캐스팅룸');
+        } else {
+            npccToast('success', `기존 로어북 ${availableLorebookNames.length}개를 불러왔어요.`, '🎭캐스팅룸');
+        }
     });
 
     bindSetting('npcc-window-size', 'windowSize', (value) => {
@@ -1814,8 +1953,10 @@ async function initializeUi() {
     uiReady = true;
     bindUi();
     populateProfiles();
+    renderLorebookChoices();
     scanCandidates();
     updateUi();
+    void refreshLorebookChoices();
     void refreshCreatedEntryStatus();
 }
 
@@ -1889,6 +2030,7 @@ function openWandDialog() {
     settings.replaceWith(settingsHome);
     wandDialog.append(settings);
     populateProfiles();
+    void refreshLorebookChoices();
     updateUi();
     wandDialog.showModal();
     bringToastsIntoWandDialog();
@@ -2005,6 +2147,7 @@ export function onEnable() {
     runtimeActive = true;
     registerEvents();
     registerWandMenu();
+    if (uiReady) void refreshLorebookChoices();
     scheduleScan(100);
     void refreshCreatedEntryStatus();
 }

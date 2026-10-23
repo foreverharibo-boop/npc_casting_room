@@ -1,4 +1,30 @@
 /** Creative generation is intentionally separate from evidence-based scouting. */
+function replaceLiteralName(text, name, replacement) {
+    name = String(name ?? '').trim();
+    if (!name || name === replacement) return String(text ?? '');
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Latin names need word-like boundaries so "May" does not alter
+    // "Maybe". Korean names commonly take a particle without a space, so a
+    // literal replacement is the least surprising way to preserve the suffix.
+    if (/^[A-Za-z0-9][A-Za-z0-9 '\u2019._-]*$/.test(name)) {
+        return String(text ?? '').replace(new RegExp(`(^|[^A-Za-z0-9])(${escaped})(?=$|[^A-Za-z0-9])`, 'gi'),
+            (_match, prefix) => `${prefix}${replacement}`);
+    }
+    return String(text ?? '').split(name).join(replacement);
+}
+
+export function anonymizeMainCharacterNames(text, context, characterNames = []) {
+    let result = String(text ?? '');
+    const names = [...new Set([
+        ...characterNames,
+        context?.name2,
+    ].map((value) => String(value ?? '').trim()).filter(Boolean))]
+        .sort((a, b) => b.length - a.length);
+    for (const name of names) result = replaceLiteralName(result, name, '{{char}}');
+    result = replaceLiteralName(result, context?.name1, '{{user}}');
+    return result;
+}
+
 export function collectNpcCreationBackground(context, { characters = true, persona = true } = {}) {
     const cards = Array.isArray(context.characters) ? context.characters : [];
     const isGroup = context.groupId !== undefined && context.groupId !== null && context.groupId !== '';
@@ -6,24 +32,23 @@ export function collectNpcCreationBackground(context, { characters = true, perso
     const selected = !characters ? [] : isGroup
         ? (group?.members ?? []).map((member) => cards.find((card) => card.avatar === member || card.name === member)).filter(Boolean)
         : [cards[Number(context.characterId)]].filter(Boolean);
-    const expandNames = (text, characterName) => String(text ?? '').trim()
+    const characterNames = selected.map((card) => card?.name ?? card?.data?.name).filter(Boolean);
+    const normalizeNames = (text) => anonymizeMainCharacterNames(String(text ?? '').trim()
         .replace(/^\s*<\s*\{\{\s*char\s*\}\}\s*>\s*/i, '')
-        .replace(/\s*<\s*\/\s*\{\{\s*char\s*\}\}\s*>\s*$/i, '')
-        .replace(/\{\{char\}\}/gi, () => characterName || context.name2 || '')
-        .replace(/\{\{user\}\}/gi, () => context.name1 || '');
+        .replace(/\s*<\s*\/\s*\{\{\s*char\s*\}\}\s*>\s*$/i, ''), context, characterNames);
     const backgroundCards = [...new Set(selected)].map((card) => {
-        const result = { name: String(card.name ?? card.data?.name ?? '') };
+        const result = { name: '{{char}}' };
         for (const field of ['description', 'personality', 'scenario', 'mes_example']) {
-            const text = expandNames(card[field] ?? card.data?.[field], result.name);
+            const text = normalizeNames(card[field] ?? card.data?.[field]);
             if (text) result[field] = text;
         }
         return result;
     }).filter((card) => Object.keys(card).length > 1);
     // ST exposes the CURRENT persona text here; never iterate saved personas.
-    const personaDescription = persona ? expandNames(context.powerUserSettings?.persona_description, context.name2) : '';
+    const personaDescription = persona ? normalizeNames(context.powerUserSettings?.persona_description) : '';
     return {
         characters: backgroundCards,
-        persona: personaDescription ? { name: String(context.name1 ?? ''), description: personaDescription } : null,
+        persona: personaDescription ? { name: '{{user}}', description: personaDescription } : null,
     };
 }
 
@@ -55,7 +80,7 @@ export function buildNpcCreationPrompt({ name = '', concept, format, customForma
             : `\n\nReference sheet (FORMAT ONLY, a different character):\n${referenceSheet}`
         : '';
     return [
-        { role: 'system', content: `Create ONE new fictional supporting character from the user's concept, not an extracted profile of someone who already appeared in the RP. Return exactly one JSON object without fences or commentary.\nSchema: {"name":"","aliases":[],"sheet":"","example_lines":[]}\n${name ? `The name must be exactly ${JSON.stringify(name)}. Do not rename or translate it.` : 'Choose a suitable specific name unless the concept already gives one; preserve any name supplied in the concept.'}\nPreserve every explicit user constraint, including negative constraints, identity and relationship limits. Expand unspecified appearance, personality, speech, background, goals and habits coherently. These additions are proposed character settings; no (추정) markers are needed. Do not change another character or invent shared past events, intimate relationships, promises, hidden knowledge or events in the current RP unless explicitly supplied by the user. No chat excerpts are provided; never claim a detail was observed in chat or that this NPC already appeared. Do not manufacture ties to the main characters when none were requested. Any example dialogue inside the sheet is an original speech sample, never a quote from past RP. Keep example_lines empty.${backgroundRule}\nWrite field values in ${korean ? 'Korean' : 'English'}, preserving explicit names and format labels.\n${formatRule}` },
+        { role: 'system', content: `Create ONE new fictional supporting character from the user's concept, not an extracted profile of someone who already appeared in the RP. Return exactly one JSON object without fences or commentary.\nSchema: {"name":"","aliases":[],"sheet":"","example_lines":[]}\n${name ? `The name must be exactly ${JSON.stringify(name)}. Do not rename or translate it.` : 'Choose a suitable specific name unless the concept already gives one; preserve any name supplied in the concept.'}\nPreserve every explicit user constraint, including negative constraints, identity and relationship limits. Expand unspecified appearance, personality, speech, background, goals and habits coherently. These additions are proposed character settings; no (추정) markers are needed. Do not change another character or invent shared past events, intimate relationships, promises, hidden knowledge or events in the current RP unless explicitly supplied by the user. No chat excerpts are provided; never claim a detail was observed in chat or that this NPC already appeared. Do not manufacture ties to the main characters when none were requested. Any example dialogue inside the sheet is an original speech sample, never a quote from past RP. Keep example_lines empty. Refer to the CURRENT persona only as the exact literal {{user}} and the existing main character only as the exact literal {{char}}; never output their actual names.${backgroundRule}\nWrite field values in ${korean ? 'Korean' : 'English'}, preserving explicit names and format labels.\n${formatRule}` },
         { role: 'user', content: `User's NPC concept:\n${concept}${hasBackground ? `\n\nExisting character/persona background (reference data):\n${JSON.stringify(background, null, 2)}` : ''}${referenceText}` },
     ];
 }
