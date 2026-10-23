@@ -307,6 +307,59 @@ test('새로 생성은 연결된 로어북을 재사용하지 않고 고유한 �
     module.onDisable();
 });
 
+test('로어북 목록이 비어 있으면 빈 객체를 기존 책으로 오인하지 않고 새 책을 만든다', async () => {
+    const names = [];
+    let loadCalls = 0;
+    let saved;
+    const context = makeContext({
+        getWorldInfoNames: () => [...names],
+        updateWorldInfoList: async () => {},
+        loadWorldInfo: async () => { loadCalls += 1; return {}; },
+        saveWorldInfo: async (name, data) => {
+            names.push(name);
+            saved = { name, data: structuredClone(data) };
+        },
+        writeExtensionField: async (id, key, value) => {
+            context.characters[id].data.extensions ??= {};
+            context.characters[id].data.extensions[key] = value;
+        },
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?empty-world-list=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const prepared = await module.prepareNpcDraft(candidate);
+    assert.equal(prepared.ok, true);
+    assert.equal(prepared.draft.target.name, '캐스팅룸-Peter');
+    assert.equal(loadCalls, 0);
+    assert.equal((await module.saveNpcDraft(prepared.draft)).ok, true);
+    assert.equal(saved.name, '캐스팅룸-Peter');
+    assert.equal(saved.data.entries[0].key[0], '민수');
+    module.onDisable();
+});
+
+test('긴 로어북 이름에도 잘리지 않는 고유 번호를 붙인다', async () => {
+    const longCharacterName = '아주긴캐릭터이름'.repeat(12);
+    const occupied = `캐스팅룸-${longCharacterName}`.slice(0, 60);
+    const context = makeContext({
+        characters: [{ name: longCharacterName, avatar: 'long.png', data: {} }],
+        getWorldInfoNames: () => [occupied],
+        updateWorldInfoList: async () => {},
+        loadWorldInfo: async () => { throw new Error('목록이 있으면 이름 탐색에 호출하면 안 됨'); },
+        saveWorldInfo: async () => {},
+    });
+    globalThis.SillyTavern = { getContext: () => context };
+    globalThis.toastr = { info() {}, success() {}, error() {} };
+    const module = await import(`../index.js?long-world-name=${Date.now()}`);
+    const candidate = module.scanCandidates().find((item) => item.name === '민수');
+    const prepared = await module.prepareNpcDraft(candidate);
+    assert.equal(prepared.ok, true);
+    assert.equal(prepared.draft.target.name.length <= 60, true);
+    assert.match(prepared.draft.target.name, / 2$/);
+    assert.notEqual(prepared.draft.target.name, occupied);
+    module.onDisable();
+});
+
 test('기존 로어북을 직접 고르면 등장 NPC 항목만 추가하고 카드 연결은 바꾸지 않는다', async () => {
     let book = { entries: {} };
     const saves = [];

@@ -34,9 +34,10 @@ const EXTENSION_PATH = (() => {
     return 'third-party/npc-casting-room';
 })();
 const LOG_PREFIX = '[🎭캐스팅룸]';
-const EXTENSION_VERSION = '1.8.3';
+const EXTENSION_VERSION = '1.8.4';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 const NEW_LOREBOOK_VALUE = '__npcc_new_lorebook__';
+const MAX_BOOK_NAME_LENGTH = 60;
 // Backstop values only — the real bound is the scan window (스캔 범위) setting.
 const MAX_SCENES = 500;
 const MAX_SCENE_CHARS = 200000;
@@ -394,7 +395,40 @@ function sanitizeBookName(value) {
         .replace(/[\\/:*?"<>|#%&{}$!'@`+=]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 60) || 'character';
+        .slice(0, MAX_BOOK_NAME_LENGTH) || 'character';
+}
+
+function numberedBookName(baseName, index) {
+    const base = sanitizeBookName(baseName);
+    if (index <= 1) return base;
+    const suffix = ` ${index}`;
+    return `${base.slice(0, MAX_BOOK_NAME_LENGTH - suffix.length).trimEnd()}${suffix}`;
+}
+
+async function listedWorldNames(worldApi, refresh = false) {
+    try {
+        if (refresh) await refreshWorldList(worldApi);
+        if (typeof worldApi.getWorldInfoNames === 'function') {
+            const names = worldApi.getWorldInfoNames();
+            if (Array.isArray(names)) return names.map((item) => String(item ?? '').trim()).filter(Boolean);
+        }
+        const direct = worldApi.world_names ?? worldApi.worldNames;
+        if (Array.isArray(direct)) return direct.map((item) => String(item ?? '').trim()).filter(Boolean);
+        const module = await import('../../../world-info.js');
+        if (Array.isArray(module.world_names)) {
+            return module.world_names.map((item) => String(item ?? '').trim()).filter(Boolean);
+        }
+    } catch { /* Older ST versions fall back to direct name probing. */ }
+    return null;
+}
+
+function findUnusedBookName(baseName, names) {
+    const existing = new Set(names.map((name) => name.toLocaleLowerCase()));
+    for (let index = 1; index <= 1000; index += 1) {
+        const name = numberedBookName(baseName, index);
+        if (!existing.has(name.toLocaleLowerCase())) return name;
+    }
+    return '';
 }
 
 export function resolveTargetBook() {
@@ -450,8 +484,14 @@ async function loadTargetBook(worldApi, target) {
         }
     }
     const baseName = target.name;
+    const names = await listedWorldNames(worldApi, true);
+    if (names) {
+        const name = findUnusedBookName(baseName, names);
+        if (name) return { target: { ...target, name }, data: null };
+        throw new Error('새 로어북에 사용할 빈 이름을 찾지 못했어요. 기존 로어북 이름을 정리한 뒤 다시 시도해 주세요.');
+    }
     for (let index = 1; index <= 1000; index += 1) {
-        const name = index === 1 ? baseName : sanitizeBookName(`${baseName} ${index}`);
+        const name = numberedBookName(baseName, index);
         const data = await worldApi.loadWorldInfo(name);
         if (!data || typeof data !== 'object') return { target: { ...target, name }, data: null };
     }
@@ -1214,12 +1254,20 @@ export async function saveNpcDraft(draft) {
 
     let data = null;
     let loadError = null;
-    try {
-        data = await worldApi.loadWorldInfo(target.name);
-    } catch (error) {
-        loadError = error;
+    let listedNames = null;
+    if (target.mustBeNew) listedNames = await listedWorldNames(worldApi, true);
+    if (listedNames) {
+        if (listedNames.some((name) => name.toLocaleLowerCase() === target.name.toLocaleLowerCase())) {
+            throw new Error(`초안을 만든 뒤 "${target.name}"이라는 로어북이 생겼어요. 기존 로어북은 덮어쓰지 않았으니 다시 생성해 주세요.`);
+        }
+    } else {
+        try {
+            data = await worldApi.loadWorldInfo(target.name);
+        } catch (error) {
+            loadError = error;
+        }
     }
-    if (target.mustBeNew && data && typeof data === 'object') {
+    if (target.mustBeNew && listedNames === null && data && typeof data === 'object') {
         throw new Error(`초안을 만든 뒤 "${target.name}"이라는 로어북이 생겼어요. 기존 로어북은 덮어쓰지 않았으니 다시 생성해 주세요.`);
     }
     if (!data || typeof data !== 'object' || !data.entries || typeof data.entries !== 'object') {
